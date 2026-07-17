@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Galaxy Studio</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#05060a;font-family:'Consolas','Monaco',monospace;}
+  #panel{position:fixed;top:31px;left:0;width:250px;max-height:calc(100vh - 31px);overflow-y:auto;
+    background:rgba(8,12,20,0.92);border-right:1px solid #2a3a58;padding:8px 10px 40px;
+    color:#b9c8e4;font:11px 'Consolas',monospace;z-index:10;box-sizing:border-box;}
+  #topbar{position:fixed;top:0;left:0;right:0;height:31px;display:flex;align-items:center;gap:8px;padding:0 10px;
+    background:rgba(6,10,16,0.96);border-bottom:1px solid #2a3a58;z-index:20;box-sizing:border-box;}
+  #topbar .ttl{color:#8fb0e0;font-weight:bold;letter-spacing:1px;font-size:12px;}
+  #build-pill{background:#16233b;color:#9fbce8;border:1px solid #3a5a8c;border-radius:9px;padding:1px 9px;font:10px 'Consolas',monospace;font-weight:bold;letter-spacing:.5px;}
+  #topbar button{background:#16233b;color:#cdd9ef;border:1px solid #3a5a8c;font:11px 'Consolas',monospace;padding:3px 10px;cursor:pointer;}
+  #topbar button:hover{background:#1e2f4d;}
+  #fps-pill{background:#0c1524;color:#8fe0a8;border:1px solid #2a5a3a;font:11px 'Consolas',monospace;padding:3px 9px;cursor:pointer;min-width:58px;text-align:center;margin-left:auto;}
+  #fps-pill:hover{background:#12331f;}
+  #fps-sheet{position:fixed;top:36px;right:8px;width:214px;background:rgba(8,14,22,0.97);border:1px solid #3a5a8c;
+    color:#cdd9ef;font:11px 'Consolas',monospace;padding:8px 10px;z-index:30;display:none;box-shadow:0 4px 14px rgba(0,0,0,0.5);}
+  #fps-sheet .fps-h{color:#8fb0e0;font-weight:bold;letter-spacing:.5px;margin-bottom:6px;border-bottom:1px solid #223;padding-bottom:3px;}
+  #fps-sheet table{width:100%;border-collapse:collapse;margin-bottom:6px;}
+  #fps-sheet th,#fps-sheet td{text-align:right;padding:2px 4px;}
+  #fps-sheet th:first-child,#fps-sheet td:first-child{text-align:left;color:#93a2bf;}
+  #fps-sheet th{color:#6f7f9c;font-weight:normal;}
+  #fps-sheet .fps-meta{color:#5f6f8c;font-size:10px;margin-bottom:8px;line-height:1.3;}
+  #fps-sheet button{width:100%;background:#2a1620;color:#e0a8b8;border:1px solid #6a2a3a;font:11px 'Consolas',monospace;padding:4px;cursor:pointer;}
+  #fps-sheet button:hover{background:#3a1e2a;}
+  #nav{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px;}
+  #nav .tab{background:#0c1524;color:#93a2bf;border:1px solid #223;font:10px 'Consolas',monospace;padding:3px 7px;cursor:pointer;}
+  #nav .tab.on{background:#1e2f4d;color:#fff;border-color:#3a5a8c;}
+  #panel h2{margin:2px 0 8px;font-size:12px;color:#fff;letter-spacing:.5px;}
+  #panel h2 span{color:#7f9fd0;font-weight:normal;}
+  #panel .grp{margin:11px 0 4px;color:#8fb0e0;font-weight:bold;border-bottom:1px solid #223;padding-bottom:2px;
+    text-transform:uppercase;letter-spacing:.5px;font-size:10px;}
+  #panel .row{display:flex;align-items:center;gap:6px;margin:3px 0;}
+  #panel .lab{flex:0 0 92px;color:#93a2bf;}
+  #panel input[type=range]{flex:1;min-width:0;accent-color:#7f9fd0;height:14px;}
+  #panel input[type=checkbox]{accent-color:#7f9fd0;}
+  #panel .val{flex:0 0 34px;text-align:right;color:#dfe8f8;}
+  #panel input[type=color]{width:44px;height:18px;border:1px solid #2a3a58;background:none;padding:0;}
+  #panel select{flex:1;min-width:0;background:#0c1524;color:#dfe8f8;border:1px solid #3a5a8c;font:11px 'Consolas',monospace;padding:1px;}
+  #panel .hint{color:#5f6f8c;margin-top:10px;font-size:10px;line-height:1.4;}
+</style>
+</head><body>
+<div id="topbar">
+  <span class="ttl">GALAXY STUDIO</span>
+  <span id="build-pill">&mdash;</span>
+  <button id="mode-btn">&#9654; VIEW GALAXY</button>
+  <span id="fps-pill" title="click for FPS records">FPS &mdash;</span>
+  <button id="export-btn">Export</button>
+  <button id="import-btn">Import</button>
+  <input type="file" id="import-file" accept=".json" style="display:none">
+</div>
+<div id="fps-sheet"></div>
+<div id="panel"><div id="nav"></div><div id="pagebody"></div></div>
+<script>
+// ===================================================================
+// SUN EXHIBIT 03 — the full rich build (every effect) + a live options menu.
+// One engine; each archived version is this file with a different ACTIVE_PRESET.
+// ===================================================================
+
+let ACTIVE_PRESET = 'full_rich';   // starting sun preset
+const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
+const BUILD_SEQ  = '01';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
+
+// each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
+// except the plasma/filament noise textures, which are baked once and tinted/faded live).
+// namespaced config — one source of truth every page writes and the view reads (Phase 0)
+let CFG = {
+  sun: {
+    // GLOBAL
+    previewR: 90, edge: 0.30, rot: 1.0, lodOn: false, bg: true, sunColor: [255, 180, 90],
+    // CORE
+    coreOn: true, coreOpacity: 1.0, specOn: true,
+    plasmaOn: true, plasmaOpacity: 0.63,
+    filamentOn: true, filamentOpacity: 0.47,
+    // GLOW (corona haze)
+    glowOn: true, glowOpacity: 0.5, glowSize: 2.6,
+    // STREAMERS
+    streamersOn: true, streamersOpacity: 0.5, streamerCount: 14, streamerLen: 3.4,
+    // BLOOM (diffraction)
+    bloomOn: true, bloomOpacity: 0.9, bloomLen: 4.5, bloomThick: 0.14, bloomAngle: 0.13,
+    // CHROMOSPHERE RIM
+    rimOn: true, rimOpacity: 0.6, rimThick: 0.06,
+    // PROMINENCE
+    promOn: true, promOpacity: 0.6, promCount: 6, promHeight: 1.6,
+    // EMBERS
+    embersOn: true, embersOpacity: 0.7, embersCount: 90
+  },
+  gen: {}, backdrop: {}, lanes: {}, traffic: {}, economy: {}   // filled in later phases
+};
+let OPTS = CFG.sun;                                 // sun renderer reads OPTS (=== CFG.sun) — unchanged downstream
+const BASE = JSON.parse(JSON.stringify(CFG.sun));   // sun defaults — preset switching resets to these first
+
+// milestone presets — overrides merged onto OPTS at startup (the archive versions)
+const PRESETS = {
+  full_rich:     { previewR: 90 },                                                                                 // 01 everything on, big
+  lod_crossfade: { lodOn: true, previewR: 45 },                                                                    // 02 reactive LOD (mid size shows the crossfade)
+  perf_cuts:     { lodOn: true, previewR: 45, embersOn: false, promOn: false, rimOn: false },                      // 03 cut embers/prom/rim
+  edge_sweet:    { lodOn: true, previewR: 60, embersOn: false, promOn: false, rimOn: false, glowOn: false, edge: 0.39 }, // 04 0.39 feather
+  stripped:      { lodOn: true, previewR: 70, embersOn: false, promOn: false, rimOn: false, glowOn: false, streamersOn: false, edge: 0.39 } // 05 core+bloom
+};
+const PRESET_LABELS = { full_rich:'01 full rich', lod_crossfade:'02 LOD crossfade', perf_cuts:'03 perf cuts', edge_sweet:'04 edge sweet-spot', stripped:'05 stripped' };
+
+let plasmaBuf, filaBuf; const BUFN = 96;
+const PANELW = 272;
+
+function setup(){
+  createCanvas(windowWidth, windowHeight);
+  let urlp = new URLSearchParams(location.search).get('preset');   // ?preset=NAME override
+  if (urlp && PRESETS[urlp]) ACTIVE_PRESET = urlp;
+  plasmaBuf = createGraphics(BUFN, BUFN); plasmaBuf.pixelDensity(1);
+  filaBuf   = createGraphics(BUFN, BUFN); filaBuf.pixelDensity(1);
+  bakePlasma(); bakeFilament();
+  showPage();                   // build nav + the active page's controls
+  applyPreset(ACTIVE_PRESET);   // apply starting sun preset + sync controls
+  document.getElementById('mode-btn').onclick   = toggleMode;
+  document.getElementById('export-btn').onclick = exportCFG;
+  document.getElementById('import-btn').onclick = () => document.getElementById('import-file').click();
+  document.getElementById('import-file').onchange = (e) => { if (e.target.files[0]) importCFG(e.target.files[0]); };
+  document.getElementById('fps-pill').onclick = toggleFpsSheet;
+  document.getElementById('build-pill').textContent = BUILD_ID;
+  loadFpsRecords();
+  updateModeBtn();
+}
+function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
+
+let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
+function draw(){
+  if (viewMode === 'galaxy') drawGalaxyView();
+  else drawSunPreview();
+  updateFps();
+}
+function drawSunPreview(){
+  background(OPTS.bg ? color(6,7,12) : color(1,1,2));
+  let cx = PANELW + (width - PANELW) / 2, cy = height / 2;
+  drawTheSun(cx, cy, OPTS.previewR, frameCount);
+  blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
+  text('r = ' + OPTS.previewR + (OPTS.lodOn ? '   (LOD weighting ON)' : ''), cx, height - 16);
+}
+function drawGalaxyView(){
+  // Phase 0 teaser — a few scattered suns using the current sun settings.
+  // Phase 1 replaces this with generateGalaxy(CFG.gen) + pan/zoom + culling.
+  background(4,5,9);
+  let cx0 = PANELW + (width - PANELW) / 2, cy0 = height / 2;
+  const T = [[-0.36,-0.22,0.5],[0.26,-0.30,0.75],[0.40,0.24,0.45],[-0.22,0.32,0.6],[0.04,0.0,1.0],[-0.44,0.06,0.4],[0.34,-0.02,0.55],[0.12,0.34,0.5]];
+  for(const s of T){ let x=cx0+s[0]*(width-PANELW)*0.42, y=cy0+s[1]*height*0.42, r=OPTS.previewR*0.35*s[2];
+    drawTheSun(x, y, r, frameCount); }
+  blendMode(BLEND); noStroke(); textAlign(CENTER, CENTER); fill(150,170,205); textSize(13);
+  text('VIEW GALAXY — Phase 0 shell (teaser suns). Phase 1 adds real generation + pan/zoom.', cx0, height - 40);
+}
+function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); }
+function updateModeBtn(){ let b=document.getElementById('mode-btn'); if(b) b.innerHTML = (viewMode==='options') ? '&#9654; VIEW GALAXY' : '&#9664; OPTIONS'; }
+function exportCFG(){
+  let blob=new Blob([JSON.stringify(CFG,null,2)],{type:'application/json'});
+  let a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='galaxy_cfg.json'; a.click();
+}
+function importCFG(file){
+  let rd=new FileReader();
+  rd.onload=()=>{ try{ let c=JSON.parse(rd.result);
+    for(const sec in CFG){ if(c[sec]) Object.assign(CFG[sec], c[sec]); }
+    showPage();
+  }catch(err){ alert('Bad config JSON: '+err.message); } };
+  rd.readAsText(file);
+}
+
+// ---------- FPS counter + persistent record sheet ----------
+const FPS_KEY='galaxy_studio_fps';
+let fpsSession={min:Infinity,max:0,sum:0,count:0};
+let fpsAll={min:Infinity,max:0,sum:0,count:0,since:null};
+let fpsSheetOpen=false, lastFpsSample=0;
+function isoDate(){ let d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
+function loadFpsRecords(){ try{ let s=localStorage.getItem(FPS_KEY); if(s){ let o=JSON.parse(s);
+  fpsAll={min:(o.min!=null?o.min:Infinity), max:o.max||0, sum:o.sum||0, count:o.count||0, since:o.since||null}; } }catch(e){} }
+function saveFpsRecords(){ try{ localStorage.setItem(FPS_KEY, JSON.stringify(fpsAll)); }catch(e){} }
+function updateFps(){
+  if (millis()-lastFpsSample < 500) return;      // sample twice a second
+  lastFpsSample=millis();
+  let f=Math.round(frameRate());
+  let pill=document.getElementById('fps-pill'); if(pill) pill.textContent='FPS '+(f>0?f:'—');
+  if(f<=0) return;
+  fpsSession.min=Math.min(fpsSession.min,f); fpsSession.max=Math.max(fpsSession.max,f); fpsSession.sum+=f; fpsSession.count++;
+  fpsAll.min=Math.min(fpsAll.min,f); fpsAll.max=Math.max(fpsAll.max,f); fpsAll.sum+=f; fpsAll.count++;
+  if(!fpsAll.since) fpsAll.since=isoDate();
+  saveFpsRecords();
+  if(fpsSheetOpen) renderFpsSheet();
+}
+function toggleFpsSheet(){ fpsSheetOpen=!fpsSheetOpen; let el=document.getElementById('fps-sheet');
+  if(el){ el.style.display=fpsSheetOpen?'block':'none'; if(fpsSheetOpen) renderFpsSheet(); } }
+function renderFpsSheet(){
+  let el=document.getElementById('fps-sheet'); if(!el) return;
+  let sAvg=fpsSession.count?Math.round(fpsSession.sum/fpsSession.count):'—';
+  let aAvg=fpsAll.count?Math.round(fpsAll.sum/fpsAll.count):'—';
+  let sMin=fpsSession.count?fpsSession.min:'—', aMin=fpsAll.count?fpsAll.min:'—';
+  el.innerHTML='<div class="fps-h">FPS RECORDS</div>'+
+    '<table><tr><th></th><th>min</th><th>avg</th><th>max</th></tr>'+
+    '<tr><td>session</td><td>'+sMin+'</td><td>'+sAvg+'</td><td>'+(fpsSession.max||'—')+'</td></tr>'+
+    '<tr><td>all-time</td><td>'+aMin+'</td><td>'+aAvg+'</td><td>'+(fpsAll.max||'—')+'</td></tr></table>'+
+    '<div class="fps-meta">all-time since '+(fpsAll.since||'—')+' · '+fpsAll.count+' samples (persists across reloads)</div>'+
+    '<button id="fps-reset">Reset all-time</button>';
+  document.getElementById('fps-reset').onclick=resetFpsRecords;
+}
+function resetFpsRecords(){
+  fpsAll={min:Infinity,max:0,sum:0,count:0,since:isoDate()};
+  fpsSession={min:Infinity,max:0,sum:0,count:0};
+  saveFpsRecords(); renderFpsSheet();
+}
+
+// ---------- helpers ----------
+function frac(x){ return x - Math.floor(x); }
+function rgba(c,a){ return 'rgba('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+a+')'; }
+function bakePlasma(){ let g=plasmaBuf; g.loadPixels(); let n=BUFN, cc=(n-1)/2, R=n/2;
+  for(let y=0;y<n;y++) for(let x=0;x<n;x++){ let nv=noise(x*0.045,y*0.045,3.1); let bri=90+nv*165;
+    let d=Math.hypot(x-cc,y-cc), a = d<=R*0.62?255:(d>=R?0:255*(1-(d-R*0.62)/(R-R*0.62)));
+    let i=4*(y*n+x); g.pixels[i]=bri; g.pixels[i+1]=bri; g.pixels[i+2]=bri; g.pixels[i+3]=a;
+  } g.updatePixels();
+}
+function bakeFilament(){ let g=filaBuf; g.loadPixels(); let n=BUFN, cc=(n-1)/2, R=n/2;
+  for(let y=0;y<n;y++) for(let x=0;x<n;x++){ let wx=noise(x*0.03,y*0.03,10)*6, wy=noise(x*0.03+5,y*0.03+5,20)*6;
+    let nv=pow(noise((x+wx)*0.06,(y+wy)*0.06,7),1.6); let bri=60+nv*195;
+    let d=Math.hypot(x-cc,y-cc), a = d<=R*0.62?255:(d>=R?0:255*(1-(d-R*0.62)/(R-R*0.62)));
+    let i=4*(y*n+x); g.pixels[i]=bri; g.pixels[i+1]=bri; g.pixels[i+2]=bri; g.pixels[i+3]=a;
+  } g.updatePixels();
+}
+
+// ---------- composite ----------
+function drawTheSun(cx,cy,r,t){
+  let R = OPTS.sunColor;
+  let lodH = OPTS.lodOn ? constrain(map(r,20,70,1,0),0,1) : 1;      // halo weight (fades in as you zoom OUT)
+  let lodC = OPTS.lodOn ? constrain(map(r,7,70,0.25,1),0,1) : 1;    // core weight (fades in as you zoom IN)
+  push(); translate(cx,cy);
+  if(OPTS.glowOn)      fx_glow(r,R,lodH);
+  if(OPTS.streamersOn) fx_streamers(r,R,t,lodH);
+  if(OPTS.bloomOn)     fx_bloom(r,R,t,lodH);
+  if(OPTS.coreOn)      fx_core(r,R,t,lodC);
+  if(OPTS.rimOn)       fx_rim(r,R,lodC);
+  if(OPTS.promOn)      fx_prominence(r,R,t,lodH);
+  if(OPTS.embersOn)    fx_embers(r,R,t,lodH);
+  pop(); blendMode(BLEND);
+}
+
+function fx_core(r,R,t,lod){
+  let cw = OPTS.coreOpacity*lod; if(cw<=0.001) return;
+  let e = constrain(1-OPTS.edge, 0.02, 1.0);
+  push(); noStroke(); blendMode(BLEND);
+  let sg=drawingContext.createRadialGradient(0,0,r*0.05,0,0,r);
+  sg.addColorStop(0,               rgba([255,252,235],cw));
+  sg.addColorStop(min(0.45,e*0.7), rgba(R,cw));
+  sg.addColorStop(e,               rgba([R[0]*0.55,R[1]*0.30,R[2]*0.12],cw));
+  sg.addColorStop(1,               rgba([R[0]*0.55,R[1]*0.30,R[2]*0.12],0));
+  drawingContext.fillStyle=sg; circle(0,0,r*2);
+  if(OPTS.plasmaOn){ push(); imageMode(CENTER); blendMode(BLEND); rotate(t*0.003*OPTS.rot);
+    tint(R[0],R[1],R[2],255*OPTS.plasmaOpacity*lod); image(plasmaBuf,0,0,r*2,r*2); noTint(); pop(); }
+  if(OPTS.filamentOn){ push(); imageMode(CENTER); blendMode(ADD); rotate(-t*0.002*OPTS.rot);
+    tint(R[0],R[1],R[2],255*OPTS.filamentOpacity*lod); image(filaBuf,0,0,r*2,r*2); noTint(); pop(); blendMode(BLEND); }
+  if(OPTS.specOn){ let hs=drawingContext.createRadialGradient(-r*0.18,-r*0.18,0,-r*0.18,-r*0.18,r*0.6);
+    hs.addColorStop(0,rgba([255,255,245],0.32*cw)); hs.addColorStop(1,rgba([255,255,245],0));
+    drawingContext.fillStyle=hs; circle(-r*0.18,-r*0.18,r*1.2); }
+  pop();
+}
+function fx_glow(r,R,lod){
+  let w=OPTS.glowOpacity*lod; if(w<=0.001) return;
+  push(); blendMode(ADD); noStroke();
+  let g=drawingContext.createRadialGradient(0,0,r*0.2,0,0,r*OPTS.glowSize);
+  g.addColorStop(0,rgba([255,240,200],0.5*w)); g.addColorStop(0.35,rgba(R,0.16*w)); g.addColorStop(1,rgba([255,90,0],0));
+  drawingContext.fillStyle=g; circle(0,0,r*OPTS.glowSize*2.1);
+  pop(); blendMode(BLEND);
+}
+function fx_streamers(r,R,t,lod){
+  let w=OPTS.streamersOpacity*lod; if(w<=0.001) return;
+  push(); blendMode(ADD); rotate(t*0.0015*OPTS.rot); noStroke();
+  let N=OPTS.streamerCount;
+  for(let i=0;i<N;i++){ let a=i/N*TWO_PI;
+    let len=r*OPTS.streamerLen*(0.6+0.4*(0.5+0.5*sin(i*2.3+t*0.01)));
+    push(); rotate(a);
+    let g=drawingContext.createLinearGradient(0,0,len,0); g.addColorStop(0,rgba(R,0.2*w)); g.addColorStop(1,rgba(R,0));
+    drawingContext.fillStyle=g; let wd=r*0.5;
+    beginShape(); vertex(0,-wd*0.3); vertex(len,-wd); vertex(len,wd); vertex(0,wd*0.3); endShape(CLOSE);
+    pop();
+  }
+  pop(); blendMode(BLEND);
+}
+function fx_bloom(r,R,t,lod){
+  let w=OPTS.bloomOpacity*lod; if(w<=0.001) return;
+  push(); blendMode(ADD); noStroke();
+  rotate(OPTS.bloomAngle*TWO_PI + t*0.0005*OPTS.rot);
+  let g=drawingContext.createRadialGradient(0,0,0,0,0,r*2.6);
+  g.addColorStop(0,rgba([255,250,235],0.9*w)); g.addColorStop(0.4,rgba(R,0.4*w)); g.addColorStop(1,rgba(R,0));
+  drawingContext.fillStyle=g; circle(0,0,r*5.2);
+  let L=r*OPTS.bloomLen, tw=r*OPTS.bloomThick, pulse=0.85+0.15*sin(t*0.05);
+  for(let s=0;s<2;s++){ push(); rotate(s*HALF_PI);
+    let lg=drawingContext.createLinearGradient(-L,0,L,0);
+    lg.addColorStop(0,rgba([255,250,235],0)); lg.addColorStop(0.5,rgba([255,250,235],0.5*pulse*w)); lg.addColorStop(1,rgba([255,250,235],0));
+    drawingContext.fillStyle=lg; rect(-L,-tw/2,2*L,tw); pop();
+  }
+  for(let s=0;s<2;s++){ push(); rotate(QUARTER_PI+s*HALF_PI);
+    let lg=drawingContext.createLinearGradient(-L*0.6,0,L*0.6,0);
+    lg.addColorStop(0,rgba(R,0)); lg.addColorStop(0.5,rgba(R,0.2*pulse*w)); lg.addColorStop(1,rgba(R,0));
+    drawingContext.fillStyle=lg; rect(-L*0.6,-tw*0.4,L*1.2,tw*0.8); pop();
+  }
+  pop(); blendMode(BLEND);
+}
+function fx_rim(r,R,lod){
+  let w=OPTS.rimOpacity*lod; if(w<=0.001) return;
+  push(); noFill(); blendMode(ADD);
+  strokeWeight(max(r*OPTS.rimThick,1)); stroke(rgba([255,120,60],0.5*w)); circle(0,0,r*2*0.99);
+  strokeWeight(max(r*OPTS.rimThick*0.5,0.6)); stroke(rgba([255,220,180],0.6*w)); circle(0,0,r*2*0.985);
+  pop(); blendMode(BLEND);
+}
+function fx_prominence(r,R,t,lod){
+  let w=OPTS.promOpacity*lod; if(w<=0.001) return;
+  push(); blendMode(ADD); noFill();
+  let N=OPTS.promCount;
+  for(let i=0;i<N;i++){ let a=i/N*TWO_PI + (noise(i*3.1)*0.6-0.3) + t*0.003*OPTS.rot;
+    let spread=0.16+noise(i*1.7)*0.16;
+    let fx=cos(a-spread)*r, fy=sin(a-spread)*r, gx=cos(a+spread)*r, gy=sin(a+spread)*r;
+    let h=r*OPTS.promHeight*(0.85 + (0.5+0.5*sin(t*0.05+i*1.3))*0.4*(0.5+noise(i*2.3)));
+    strokeWeight(max(r*0.035,1)); stroke(255,120+40*sin(t*0.05+i),50,150*w);
+    beginShape(); vertex(fx,fy); quadraticVertex(cos(a)*h,sin(a)*h,gx,gy); endShape();
+  }
+  pop(); blendMode(BLEND);
+}
+function fx_embers(r,R,t,lod){
+  let w=OPTS.embersOpacity*lod; if(w<=0.001) return;
+  push(); blendMode(ADD); noStroke();
+  let N=OPTS.embersCount;
+  for(let i=0;i<N;i++){ let rnd=frac(sin(i*127.1)*43758.5), rnd2=frac(sin(i*311.7)*24634.6);
+    let a=(i/N)*TWO_PI + t*0.01*OPTS.rot*(0.5+rnd2);
+    let rad=r*(0.9+1.3*rnd)+sin(t*0.03+i)*r*0.1;
+    let x=cos(a)*rad, y=sin(a)*rad; let br=constrain(1-rad/(r*2.2),0,1);
+    fill(255,150+br*90,50,(20+br*150)*w); circle(x,y,0.8+br*2.2);
+  }
+  pop(); blendMode(BLEND);
+}
+
+// ---------- options panel (generated from schema) ----------
+const SUN_SCHEMA = [
+  ['Global', [['previewR','Sun size','range',5,170,1],['edge','Edge softness','range',0,0.85,0.01],
+    ['rot','Anim speed','range',0,3,0.05],['lodOn','LOD by size','bool'],['bg','Dark bg','bool'],['sunColor','Sun color','color']]],
+  ['Core', [['coreOn','Core','bool'],['coreOpacity','Core opacity','range',0,1,0.01],['specOn','Specular','bool'],
+    ['plasmaOn','Plasma','bool'],['plasmaOpacity','Plasma op.','range',0,1,0.01],
+    ['filamentOn','Filament','bool'],['filamentOpacity','Filament op.','range',0,1,0.01]]],
+  ['Glow (corona haze)', [['glowOn','Glow','bool'],['glowOpacity','Opacity','range',0,1,0.01],['glowSize','Size','range',1,5,0.05]]],
+  ['Streamers', [['streamersOn','Streamers','bool'],['streamersOpacity','Opacity','range',0,1,0.01],
+    ['streamerCount','Count','range',3,30,1],['streamerLen','Length','range',1,6,0.1]]],
+  ['Bloom (diffraction)', [['bloomOn','Bloom','bool'],['bloomOpacity','Opacity','range',0,1,0.01],
+    ['bloomLen','Spike length','range',1,10,0.1],['bloomThick','Spike thick','range',0.02,0.5,0.01],['bloomAngle','Angle','range',0,1,0.01]]],
+  ['Chromosphere rim', [['rimOn','Rim','bool'],['rimOpacity','Opacity','range',0,1,0.01],['rimThick','Thickness','range',0.01,0.2,0.005]]],
+  ['Prominence', [['promOn','Prominence','bool'],['promOpacity','Opacity','range',0,1,0.01],['promCount','Count','range',1,12,1],['promHeight','Height','range',1,2.5,0.05]]],
+  ['Embers', [['embersOn','Embers','bool'],['embersOpacity','Opacity','range',0,1,0.01],['embersCount','Count','range',10,200,5]]]
+];
+const PAGES = [
+  { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true },
+  { id:'gen',      label:'Galaxy Gen', schema: [],         target: ()=>CFG.gen },
+  { id:'backdrop', label:'Backdrop',   schema: [],         target: ()=>CFG.backdrop },
+  { id:'lanes',    label:'Lanes',      schema: [],         target: ()=>CFG.lanes },
+  { id:'traffic',  label:'Traffic',    schema: [],         target: ()=>CFG.traffic },
+  { id:'economy',  label:'Economy',    schema: [],         target: ()=>CFG.economy }
+];
+let activePage = 'sun';
+function rgbToHex(c){ return '#'+[0,1,2].map(i=>('0'+(c[i]|0).toString(16)).slice(-2)).join(''); }
+function hexToRgb(h){ return [parseInt(h.substr(1,2),16),parseInt(h.substr(3,2),16),parseInt(h.substr(5,2),16)]; }
+let controls = {};        // key -> {type, input, val} for the CURRENT page (rebuilt on page switch)
+let presetSel = null;
+function buildNav(){
+  let nav=document.getElementById('nav'); nav.innerHTML='';
+  for(const p of PAGES){
+    let b=document.createElement('button'); b.className='tab'+(p.id===activePage?' on':''); b.textContent=p.label;
+    b.onclick=()=>{ activePage=p.id; showPage(); };
+    nav.appendChild(b);
+  }
+}
+function showPage(){
+  buildNav();
+  let body=document.getElementById('pagebody'); body.innerHTML=''; controls={}; presetSel=null;
+  let page=PAGES.find(p=>p.id===activePage);
+  if(page.presets) buildPresetRow(body);
+  if(!page.schema.length){
+    let note=document.createElement('div'); note.className='hint';
+    note.textContent='No options here yet — this page fills in a later phase.';
+    body.appendChild(note); return;
+  }
+  buildControls(page.schema, page.target(), body);
+  let hint=document.createElement('div'); hint.className='hint';
+  hint.textContent='Toggle any layer or drag any value — updates live.';
+  body.appendChild(hint);
+}
+function buildPresetRow(body){
+  let pr=document.createElement('div'); pr.className='row';
+  let pl=document.createElement('span'); pl.className='lab'; pl.textContent='Preset'; pr.appendChild(pl);
+  presetSel=document.createElement('select');
+  for(const k of Object.keys(PRESETS)){ let o=document.createElement('option'); o.value=k; o.textContent=PRESET_LABELS[k]||k; presetSel.appendChild(o); }
+  presetSel.value=ACTIVE_PRESET;
+  presetSel.onchange=()=>applyPreset(presetSel.value);
+  pr.appendChild(presetSel); body.appendChild(pr);
+  let ph=document.createElement('div'); ph.className='hint'; ph.style.margin='2px 0 4px'; ph.textContent='pick a sun version, or press [ / ] to cycle'; body.appendChild(ph);
+}
+function buildControls(schema, target, body){
+  for(const [group, items] of schema){
+    let h=document.createElement('div'); h.className='grp'; h.textContent=group; body.appendChild(h);
+    for(const item of items){
+      let key=item[0], label=item[1], type=item[2];
+      let row=document.createElement('label'); row.className='row';
+      let lab=document.createElement('span'); lab.className='lab'; lab.textContent=label; row.appendChild(lab);
+      if(type==='bool'){
+        let inp=document.createElement('input'); inp.type='checkbox'; inp.checked=!!target[key];
+        inp.oninput=()=>{ target[key]=inp.checked; }; row.appendChild(inp);
+        controls[key]={type, input:inp};
+      } else if(type==='range'){
+        let inp=document.createElement('input'); inp.type='range'; inp.min=item[3]; inp.max=item[4]; inp.step=item[5]; inp.value=target[key];
+        let val=document.createElement('span'); val.className='val'; val.textContent=target[key];
+        inp.oninput=()=>{ target[key]=parseFloat(inp.value); val.textContent=inp.value; };
+        row.appendChild(inp); row.appendChild(val);
+        controls[key]={type, input:inp, val};
+      } else if(type==='color'){
+        let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(target[key]);
+        inp.oninput=()=>{ target[key]=hexToRgb(inp.value); }; row.appendChild(inp);
+        controls[key]={type, input:inp};
+      }
+      body.appendChild(row);
+    }
+  }
+}
+function refreshPanel(){
+  for(const key in controls){ let c=controls[key];
+    if(c.type==='bool') c.input.checked=!!OPTS[key];
+    else if(c.type==='range'){ c.input.value=OPTS[key]; if(c.val) c.val.textContent=OPTS[key]; }
+    else if(c.type==='color') c.input.value=rgbToHex(OPTS[key]);
+  }
+  if(presetSel) presetSel.value=ACTIVE_PRESET;
+}
+function applyPreset(name){
+  if(!PRESETS[name]) return;
+  ACTIVE_PRESET=name;
+  let merged=JSON.parse(JSON.stringify(BASE));              // reset to base defaults...
+  let ov=JSON.parse(JSON.stringify(PRESETS[name]));         // ...then apply this preset's overrides
+  for(const k in ov) merged[k]=ov[k];
+  for(const k in merged) OPTS[k]=merged[k];
+  refreshPanel();
+  let tag=document.getElementById('preset-tag'); if(tag) tag.textContent='· '+(PRESET_LABELS[name]||name);
+}
+function keyPressed(){
+  if(activePage!=='sun') return;   // preset cycling lives on the Sun page
+  let keys=Object.keys(PRESETS), i=keys.indexOf(ACTIVE_PRESET);
+  if(key===']') applyPreset(keys[(i+1)%keys.length]);
+  else if(key==='[') applyPreset(keys[(i-1+keys.length)%keys.length]);
+}
+</script></body></html>
