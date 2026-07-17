@@ -62,7 +62,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '13';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '15';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -93,7 +93,20 @@ let CFG = {
   },
   gen: { starCount: 60, radius: 1200, minDist: 130, useGalaxy01: true, starSize: 12, seed: 1234, bakedRender: true,
          wM: 1, wK: 1, wG: 1, wF: 1, wB: 1, wO: 1, jitter: 15 },
-  backdrop: {}, lanes: {}, traffic: {}, economy: {}   // filled in later phases
+  backdrop: {
+    cover: 1.5, bakeRes: 1024,                                                  // extent = gen.radius * cover ; baked-buffer resolution
+    // BASE FILL
+    baseOn: true, baseColor: [6, 8, 16], baseOpacity: 1.0,
+    // NEBULA (procedural soft clouds, seeded)
+    nebOn: true, nebColorA: [40, 30, 90], nebColorB: [120, 40, 110], nebCount: 42, nebScale: 1.0, nebOpacity: 0.5, nebSeed: 7,
+    // GRID OVERLAY
+    gridOn: false, gridColor: [60, 90, 140], gridOpacity: 0.25, gridSpacing: 200, gridWeight: 1,
+    // RADIAL FADE (vignette — hides image/nebula edge cutoff)
+    fadeOn: true, fadeColor: [4, 5, 9], fadeInner: 0.55, fadeOuter: 1.0, fadeOpacity: 1.0,
+    // BAKE INCLUDES — which layers go into the baked backdrop buffer (unchecked = drawn live)
+    bake_base: true, bake_neb: true, bake_grid: false, bake_fade: true
+  },
+  lanes: {}, traffic: {}, economy: {}   // filled in later phases
 };
 let OPTS = CFG.sun;                                 // sun renderer reads OPTS (=== CFG.sun) — unchanged downstream
 const BASE = JSON.parse(JSON.stringify(CFG.sun));   // sun defaults — preset switching resets to these first
@@ -105,9 +118,10 @@ const PRESETS = {
   lod_crossfade: { lodOn: true, previewR: 45 },                                                                    // 02 reactive LOD (mid size shows the crossfade)
   perf_cuts:     { lodOn: true, previewR: 45, embersOn: false, promOn: false, rimOn: false },                      // 03 cut embers/prom/rim
   edge_sweet:    { lodOn: true, previewR: 60, embersOn: false, promOn: false, rimOn: false, glowOn: false, edge: 0.39 }, // 04 0.39 feather
-  stripped:      { lodOn: true, previewR: 70, embersOn: false, promOn: false, rimOn: false, glowOn: false, streamersOn: false, edge: 0.39 } // 05 core+bloom
+  stripped:      { lodOn: true, previewR: 70, embersOn: false, promOn: false, rimOn: false, glowOn: false, streamersOn: false, edge: 0.39 }, // 05 core+bloom
+  glow_bloom:    { previewR:45, edge:0.30, rot:1.0, lodOn:true, bg:true, sunColor:[255,180,90], coreOn:false, coreOpacity:1.0, specOn:true, plasmaOn:false, plasmaOpacity:0.63, filamentOn:false, filamentOpacity:0.47, glowOn:true, glowOpacity:0.73, glowSize:3.6, streamersOn:false, streamersOpacity:0.5, streamerCount:14, streamerLen:3.4, bloomOn:true, bloomOpacity:0.9, bloomLen:4.5, bloomThick:0.14, bloomAngle:0, bloomGlow:false, bloomRandom:true, bloomLockAngle:true, bloomLockRot:true, rimOn:false, rimOpacity:0.6, rimThick:0.06, promOn:false, promOpacity:0.6, promCount:6, promHeight:1.6, embersOn:false, embersOpacity:0.7, embersCount:90, bake_core:false, bake_glow:true, bake_streamers:false, bake_bloom:false, bake_rim:true, bake_prom:true, bake_embers:true } // 06 glow bloom (imported cfg_02, full snapshot; sun-only — its gen starCount:300 not carried)
 };
-const PRESET_LABELS = { current:'★ current', full_rich:'01 full rich', lod_crossfade:'02 LOD crossfade', perf_cuts:'03 perf cuts', edge_sweet:'04 edge sweet-spot', stripped:'05 stripped' };
+const PRESET_LABELS = { current:'★ current', full_rich:'01 full rich', lod_crossfade:'02 LOD crossfade', perf_cuts:'03 perf cuts', edge_sweet:'04 edge sweet-spot', stripped:'05 stripped', glow_bloom:'06 glow bloom' };
 
 let plasmaBuf, filaBuf; const BUFN = 96;
 const PANELW = 272;
@@ -156,6 +170,7 @@ function drawGalaxyView(){
   let liveOverlay = baked && ['glow','streamers','bloom','core','rim','prom','embers'].some(L => OPTS[L+'On'] && CFG.sun['bake_'+L]===false);
   push();
   translate(playX, playY); translate(cam.x*cam.zoom, cam.y*cam.zoom); scale(cam.zoom);
+  drawBackdrop();                                            // composite backdrop layers behind the stars
   let drawn=0;
   for(const s of galaxy){
     let wr = CFG.gen.starSize * (1 + (s.tier-1)*0.35);        // world star radius by tier
@@ -219,7 +234,76 @@ function getSunSprite(color){
   sunSpriteCache.set(key, spr);
   return spr;
 }
-function regenerate(){ generateGalaxy(CFG.gen); }
+// ---------- Backdrop (composite layers rendered behind the galaxy) ----------
+let bdBuffer=null, bdReady=false;
+function bdExtent(){ return CFG.gen.radius * CFG.backdrop.cover; }             // world half-size the backdrop covers
+function invalidateBackdrop(){ bdReady=false; }                               // rebuild the baked buffer lazily on next frame
+function bdHash(i,s){ let x=Math.sin(i*127.1 + s*311.7)*43758.5453; return x-Math.floor(x); }   // seeded 0..1
+function bdLayerOn(layer, filter){
+  let B=CFG.backdrop;
+  if(!B[layer+'On']) return false;
+  if(!filter) return true;                                                    // preview: all on-layers
+  let baked = B['bake_'+layer]!==false;
+  return filter==='bake' ? baked : !baked;
+}
+const BD_LAYERS = ['base','neb','grid','fade'];
+function drawBackdropLayers(P, E, filter){
+  let B=CFG.backdrop;
+  if(bdLayerOn('base',filter)) bd_base(P,E,B);
+  if(bdLayerOn('neb', filter)) bd_neb (P,E,B);
+  if(bdLayerOn('grid',filter)) bd_grid(P,E,B);
+  if(bdLayerOn('fade',filter)) bd_fade(P,E,B);
+}
+function bd_base(P,E,B){
+  P.push(); P.noStroke(); P.rectMode(CENTER);
+  P.fill(B.baseColor[0],B.baseColor[1],B.baseColor[2],255*B.baseOpacity);
+  P.rect(0,0,2*E,2*E); P.pop();
+}
+function bd_neb(P,E,B){
+  P.push(); P.noStroke(); P.blendMode(ADD);
+  let n=B.nebCount|0;
+  for(let i=0;i<n;i++){
+    let a=bdHash(i,B.nebSeed)*TWO_PI, rr=E*0.9*Math.sqrt(bdHash(i+50,B.nebSeed));
+    let x=Math.cos(a)*rr, y=Math.sin(a)*rr;
+    let rad=E*(0.12+0.35*bdHash(i+100,B.nebSeed))*B.nebScale;
+    let t=bdHash(i+150,B.nebSeed);
+    let col=[lerp(B.nebColorA[0],B.nebColorB[0],t),lerp(B.nebColorA[1],B.nebColorB[1],t),lerp(B.nebColorA[2],B.nebColorB[2],t)];
+    let g=P.drawingContext.createRadialGradient(x,y,0,x,y,rad);
+    g.addColorStop(0, rgba(col, 0.5*B.nebOpacity)); g.addColorStop(1, rgba(col, 0));
+    P.drawingContext.fillStyle=g; P.circle(x,y,rad*2);
+  }
+  P.pop(); P.blendMode(BLEND);
+}
+function bd_grid(P,E,B){
+  P.push(); P.noFill(); P.strokeWeight(B.gridWeight);
+  P.stroke(B.gridColor[0],B.gridColor[1],B.gridColor[2],255*B.gridOpacity);
+  let sp=B.gridSpacing;
+  for(let x=0;x<=E;x+=sp){ P.line(x,-E,x,E); if(x>0) P.line(-x,-E,-x,E); }
+  for(let y=0;y<=E;y+=sp){ P.line(-E,y,E,y); if(y>0) P.line(-E,-y,E,-y); }
+  P.pop();
+}
+function bd_fade(P,E,B){
+  P.push(); P.noStroke(); P.rectMode(CENTER);
+  let g=P.drawingContext.createRadialGradient(0,0,E*B.fadeInner,0,0,E*B.fadeOuter);
+  g.addColorStop(0, rgba(B.fadeColor,0)); g.addColorStop(1, rgba(B.fadeColor,B.fadeOpacity));
+  P.drawingContext.fillStyle=g; P.rect(0,0,2*E,2*E); P.pop();
+}
+function bakeBackdrop(){
+  let E=bdExtent(), res=CFG.backdrop.bakeRes|0;
+  if(!bdBuffer || bdBuffer.width!==res){ bdBuffer=createGraphics(res,res); bdBuffer.pixelDensity(1); }
+  bdBuffer.clear();
+  bdBuffer.push();
+  bdBuffer.translate(res/2,res/2); bdBuffer.scale(res/(2*E));                 // buffer space -> world [-E,E]^2
+  drawBackdropLayers(bdBuffer, E, 'bake');
+  bdBuffer.pop();
+  bdReady=true;
+}
+function drawBackdrop(){                                                      // called inside the camera transform, before stars
+  let E=bdExtent();
+  if(BD_LAYERS.some(L=>bdLayerOn(L,'bake'))){ if(!bdReady) bakeBackdrop(); imageMode(CENTER); image(bdBuffer,0,0,2*E,2*E); }
+  if(BD_LAYERS.some(L=>bdLayerOn(L,'live'))) drawBackdropLayers(window, E, 'live');
+}
+function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); }       // radius change -> extent change -> re-bake
 function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); regenerate(); }
 function mouseDragged(){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; } }
 function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); return false; } }
@@ -233,6 +317,7 @@ function importCFG(file){
   let rd=new FileReader();
   rd.onload=()=>{ try{ let c=JSON.parse(rd.result);
     for(const sec in CFG){ if(c[sec]) Object.assign(CFG[sec], c[sec]); }
+    invalidateSunSprites(); invalidateBackdrop();
     showPage();
   }catch(err){ alert('Bad config JSON: '+err.message); } };
   rd.readAsText(file);
@@ -455,10 +540,21 @@ const GEN_SCHEMA = [
   ['Spectral mix', [['wM','Red (M)','range',0,5,1],['wK','Orange (K)','range',0,5,1],['wG','Yellow (G)','range',0,5,1],
     ['wF','White (F)','range',0,5,1],['wB','Blue (B)','range',0,5,1],['wO','Purple (O)','range',0,5,1],['jitter','Color jitter','range',0,40,1]]]
 ];
+const BACKDROP_SCHEMA = [
+  ['Global', [['cover','Cover ×radius','range',0.5,3,0.05],['bakeRes','Bake res','range',256,2048,128]]],
+  ['Base fill', [['baseOn','Base','bool'],['baseColor','Color','color'],['baseOpacity','Opacity','range',0,1,0.01]]],
+  ['Nebula', [['nebOn','Nebula','bool'],['nebColorA','Color A','color'],['nebColorB','Color B','color'],
+    ['nebCount','Cloud count','range',0,120,1],['nebScale','Cloud size','range',0.2,3,0.05],['nebOpacity','Opacity','range',0,1,0.01],['nebSeed','Seed','range',1,999,1]]],
+  ['Grid overlay', [['gridOn','Grid','bool'],['gridColor','Color','color'],['gridOpacity','Opacity','range',0,1,0.01],
+    ['gridSpacing','Spacing','range',50,600,10],['gridWeight','Line weight','range',0.5,4,0.5]]],
+  ['Radial fade (hide edges)', [['fadeOn','Fade','bool'],['fadeColor','Edge color','color'],
+    ['fadeInner','Inner','range',0,1,0.01],['fadeOuter','Outer','range',0.2,1.5,0.01],['fadeOpacity','Opacity','range',0,1,0.01]]],
+  ['Bake includes (off = drawn live)', [['bake_base','Base','bool'],['bake_neb','Nebula','bool'],['bake_grid','Grid','bool'],['bake_fade','Fade','bool']]]
+];
 const PAGES = [
   { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true, onChange: invalidateSunSprites },
   { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: regenerate },
-  { id:'backdrop', label:'Backdrop',   schema: [],         target: ()=>CFG.backdrop },
+  { id:'backdrop', label:'Backdrop',   schema: BACKDROP_SCHEMA, target: ()=>CFG.backdrop, onChange: invalidateBackdrop },
   { id:'lanes',    label:'Lanes',      schema: [],         target: ()=>CFG.lanes },
   { id:'traffic',  label:'Traffic',    schema: [],         target: ()=>CFG.traffic },
   { id:'economy',  label:'Economy',    schema: [],         target: ()=>CFG.economy }
