@@ -62,7 +62,7 @@
 
 let ACTIVE_PRESET = 'full_rich';   // starting sun preset
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '04';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '05';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -87,7 +87,9 @@ let CFG = {
     // PROMINENCE
     promOn: true, promOpacity: 0.6, promCount: 6, promHeight: 1.6,
     // EMBERS
-    embersOn: true, embersOpacity: 0.7, embersCount: 90
+    embersOn: true, embersOpacity: 0.7, embersCount: 90,
+    // BAKE INCLUDES — which layers go into the baked galaxy sprite (unchecked = drawn live per star)
+    bake_core: true, bake_glow: true, bake_streamers: true, bake_bloom: true, bake_rim: true, bake_prom: true, bake_embers: true
   },
   gen: { starCount: 60, radius: 1200, minDist: 130, useGalaxy01: true, starSize: 12, seed: 1234, bakedRender: true,
          wM: 1, wK: 1, wG: 1, wF: 1, wB: 1, wO: 1, jitter: 15 },
@@ -150,21 +152,23 @@ function drawGalaxyView(){
   let hw=playW/(2*cam.zoom), hh=height/(2*cam.zoom);
   let vMinX=-cam.x-hw, vMaxX=-cam.x+hw, vMinY=-cam.y-hh, vMaxY=-cam.y+hh;   // visible world rect (cull)
   let baked = CFG.gen.bakedRender;
+  let liveOverlay = baked && ['glow','streamers','bloom','core','rim','prom','embers'].some(L => OPTS[L+'On'] && CFG.sun['bake_'+L]===false);
   push();
   translate(playX, playY); translate(cam.x*cam.zoom, cam.y*cam.zoom); scale(cam.zoom);
-  if(baked) imageMode(CENTER);
   let drawn=0;
   for(const s of galaxy){
     let wr = CFG.gen.starSize * (1 + (s.tier-1)*0.35);        // world star radius by tier
     let m = wr*6;                                             // cull margin for halos
     if(s.x<vMinX-m || s.x>vMaxX+m || s.y<vMinY-m || s.y>vMaxY+m) continue;
-    if(baked){ let sz=SUN_SPRITE_SZ*(wr/SUN_REF); image(getSunSprite(s.color), s.x, s.y, sz, sz); }   // 1 blit/star
-    else drawTheSun(s.x, s.y, wr, frameCount, s.color, wr*cam.zoom);                                   // live gradients
+    if(baked){
+      imageMode(CENTER); let sz=SUN_SPRITE_SZ*(wr/SUN_REF); image(getSunSprite(s.color), s.x, s.y, sz, sz);   // baked layers: 1 blit
+      if(liveOverlay) drawTheSun(s.x, s.y, wr, frameCount, s.color, wr*cam.zoom, null, 'live');                 // non-baked layers, animated
+    } else drawTheSun(s.x, s.y, wr, frameCount, s.color, wr*cam.zoom);                                          // fully live
     drawn++;
   }
   pop();
   blendMode(BLEND); noStroke(); textAlign(LEFT, TOP); fill(120,140,175); textSize(11);
-  text(galaxy.length+' stars · '+drawn+' drawn · '+(baked?'BAKED':'live')+' · '+sunSpriteCache.size+' sprites · zoom '+cam.zoom.toFixed(2)+'   [drag/wheel]', PANELW+12, 40);
+  text(galaxy.length+' stars · '+drawn+' drawn · '+(baked?('BAKED'+(liveOverlay?'+live':'')):'live')+' · '+sunSpriteCache.size+' sprites · zoom '+cam.zoom.toFixed(2)+'   [drag/wheel]', PANELW+12, 40);
 }
 
 // ---------- Phase 1: galaxy generation + camera ----------
@@ -209,7 +213,7 @@ function getSunSprite(color){
   if(spr) return spr;
   spr=createGraphics(SUN_SPRITE_SZ, SUN_SPRITE_SZ); spr.pixelDensity(1);
   let sc=OPTS.sunColor, sl=OPTS.lodOn; OPTS.sunColor=color; OPTS.lodOn=false;   // bake full-strength composite in this color
-  drawTheSun(SUN_SPRITE_SZ/2, SUN_SPRITE_SZ/2, SUN_REF, 0, color, null, spr);   // frozen frame -> static sprite
+  drawTheSun(SUN_SPRITE_SZ/2, SUN_SPRITE_SZ/2, SUN_REF, 0, color, null, spr, 'bake');   // frozen frame, baked layers only
   OPTS.sunColor=sc; OPTS.lodOn=sl;
   sunSpriteCache.set(key, spr);
   return spr;
@@ -293,21 +297,29 @@ function bakeFilament(){ let g=filaBuf; g.loadPixels(); let n=BUFN, cc=(n-1)/2, 
 }
 
 // ---------- composite ----------
+// which layers to draw for a given pass: filter null = all on-layers (preview);
+// 'bake' = only layers flagged to bake; 'live' = the on-layers NOT baked (drawn per-frame over the sprite)
+function layerOn(layer, filter){
+  if(!OPTS[layer+'On']) return false;
+  if(!filter) return true;
+  let baked = CFG.sun['bake_'+layer] !== false;   // default: included in the bake
+  return filter==='bake' ? baked : !baked;
+}
 // g = target graphics (offscreen buffer when baking); defaults to the main canvas (window) for live draw
-function drawTheSun(cx,cy,r,t,col,lodR,g){
+function drawTheSun(cx,cy,r,t,col,lodR,g,filter){
   let P = g || window;
   let R = col || OPTS.sunColor;
   let lr = (lodR!=null) ? lodR : r;                                 // on-screen radius drives LOD (galaxy view passes r*zoom)
   let lodH = OPTS.lodOn ? constrain(map(lr,20,70,1,0),0,1) : 1;     // halo weight (fades in as you zoom OUT)
   let lodC = OPTS.lodOn ? constrain(map(lr,7,70,0.25,1),0,1) : 1;   // core weight (fades in as you zoom IN)
   P.push(); P.translate(cx,cy);
-  if(OPTS.glowOn)      fx_glow(P,r,R,lodH);
-  if(OPTS.streamersOn) fx_streamers(P,r,R,t,lodH);
-  if(OPTS.bloomOn)     fx_bloom(P,r,R,t,lodH);
-  if(OPTS.coreOn)      fx_core(P,r,R,t,lodC);
-  if(OPTS.rimOn)       fx_rim(P,r,R,lodC);
-  if(OPTS.promOn)      fx_prominence(P,r,R,t,lodH);
-  if(OPTS.embersOn)    fx_embers(P,r,R,t,lodH);
+  if(layerOn('glow',filter))      fx_glow(P,r,R,lodH);
+  if(layerOn('streamers',filter)) fx_streamers(P,r,R,t,lodH);
+  if(layerOn('bloom',filter))     fx_bloom(P,r,R,t,lodH);
+  if(layerOn('core',filter))      fx_core(P,r,R,t,lodC);
+  if(layerOn('rim',filter))       fx_rim(P,r,R,lodC);
+  if(layerOn('prom',filter))      fx_prominence(P,r,R,t,lodH);
+  if(layerOn('embers',filter))    fx_embers(P,r,R,t,lodH);
   P.pop(); P.blendMode(BLEND);
 }
 
@@ -419,7 +431,9 @@ const SUN_SCHEMA = [
     ['bloomLen','Spike length','range',1,10,0.1],['bloomThick','Spike thick','range',0.02,0.5,0.01],['bloomAngle','Angle','range',0,1,0.01]]],
   ['Chromosphere rim', [['rimOn','Rim','bool'],['rimOpacity','Opacity','range',0,1,0.01],['rimThick','Thickness','range',0.01,0.2,0.005]]],
   ['Prominence', [['promOn','Prominence','bool'],['promOpacity','Opacity','range',0,1,0.01],['promCount','Count','range',1,12,1],['promHeight','Height','range',1,2.5,0.05]]],
-  ['Embers', [['embersOn','Embers','bool'],['embersOpacity','Opacity','range',0,1,0.01],['embersCount','Count','range',10,200,5]]]
+  ['Embers', [['embersOn','Embers','bool'],['embersOpacity','Opacity','range',0,1,0.01],['embersCount','Count','range',10,200,5]]],
+  ['Bake includes (off = drawn live)', [['bake_core','Core','bool'],['bake_glow','Glow','bool'],['bake_streamers','Streamers','bool'],
+    ['bake_bloom','Bloom','bool'],['bake_rim','Rim','bool'],['bake_prom','Prominence','bool'],['bake_embers','Embers','bool']]]
 ];
 const GEN_SCHEMA = [
   ['Generation', [['starCount','Stars','range',10,300,1],['radius','Radius','range',400,2500,50],
