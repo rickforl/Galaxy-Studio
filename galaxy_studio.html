@@ -60,9 +60,9 @@
 // One engine; each archived version is this file with a different ACTIVE_PRESET.
 // ===================================================================
 
-let ACTIVE_PRESET = 'full_rich';   // starting sun preset
+let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '07';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '13';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -71,25 +71,25 @@ const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the bui
 let CFG = {
   sun: {
     // GLOBAL
-    previewR: 90, edge: 0.30, rot: 1.0, lodOn: false, bg: true, sunColor: [255, 180, 90],
+    previewR: 45, edge: 0.30, rot: 1.0, lodOn: false, bg: true, sunColor: [255, 180, 90],
     // CORE
-    coreOn: true, coreOpacity: 1.0, specOn: true,
+    coreOn: false, coreOpacity: 1.0, specOn: true,
     plasmaOn: true, plasmaOpacity: 0.63,
     filamentOn: true, filamentOpacity: 0.47,
     // GLOW (corona haze)
-    glowOn: true, glowOpacity: 0.5, glowSize: 2.6,
+    glowOn: false, glowOpacity: 0.5, glowSize: 2.6,
     // STREAMERS
     streamersOn: true, streamersOpacity: 0.5, streamerCount: 14, streamerLen: 3.4,
     // BLOOM (diffraction)
-    bloomOn: true, bloomOpacity: 0.9, bloomLen: 4.5, bloomThick: 0.14, bloomAngle: 0.13, bloomGlow: true, bloomRandom: false,
+    bloomOn: true, bloomOpacity: 0.9, bloomLen: 4.5, bloomThick: 0.14, bloomAngle: 0, bloomGlow: false, bloomRandom: true, bloomLockAngle: true, bloomLockRot: true,
     // CHROMOSPHERE RIM
-    rimOn: true, rimOpacity: 0.6, rimThick: 0.06,
+    rimOn: false, rimOpacity: 0.6, rimThick: 0.06,
     // PROMINENCE
-    promOn: true, promOpacity: 0.6, promCount: 6, promHeight: 1.6,
+    promOn: false, promOpacity: 0.6, promCount: 6, promHeight: 1.6,
     // EMBERS
-    embersOn: true, embersOpacity: 0.7, embersCount: 90,
+    embersOn: false, embersOpacity: 0.7, embersCount: 90,
     // BAKE INCLUDES — which layers go into the baked galaxy sprite (unchecked = drawn live per star)
-    bake_core: true, bake_glow: true, bake_streamers: true, bake_bloom: true, bake_rim: true, bake_prom: true, bake_embers: true
+    bake_core: true, bake_glow: true, bake_streamers: false, bake_bloom: false, bake_rim: true, bake_prom: true, bake_embers: true
   },
   gen: { starCount: 60, radius: 1200, minDist: 130, useGalaxy01: true, starSize: 12, seed: 1234, bakedRender: true,
          wM: 1, wK: 1, wG: 1, wF: 1, wB: 1, wO: 1, jitter: 15 },
@@ -100,13 +100,14 @@ const BASE = JSON.parse(JSON.stringify(CFG.sun));   // sun defaults — preset s
 
 // milestone presets — overrides merged onto OPTS at startup (the archive versions)
 const PRESETS = {
+  current:       {},                                                                                              // 00 working default (= CFG.sun / imported cfg)
   full_rich:     { previewR: 90 },                                                                                 // 01 everything on, big
   lod_crossfade: { lodOn: true, previewR: 45 },                                                                    // 02 reactive LOD (mid size shows the crossfade)
   perf_cuts:     { lodOn: true, previewR: 45, embersOn: false, promOn: false, rimOn: false },                      // 03 cut embers/prom/rim
   edge_sweet:    { lodOn: true, previewR: 60, embersOn: false, promOn: false, rimOn: false, glowOn: false, edge: 0.39 }, // 04 0.39 feather
   stripped:      { lodOn: true, previewR: 70, embersOn: false, promOn: false, rimOn: false, glowOn: false, streamersOn: false, edge: 0.39 } // 05 core+bloom
 };
-const PRESET_LABELS = { full_rich:'01 full rich', lod_crossfade:'02 LOD crossfade', perf_cuts:'03 perf cuts', edge_sweet:'04 edge sweet-spot', stripped:'05 stripped' };
+const PRESET_LABELS = { current:'★ current', full_rich:'01 full rich', lod_crossfade:'02 LOD crossfade', perf_cuts:'03 perf cuts', edge_sweet:'04 edge sweet-spot', stripped:'05 stripped' };
 
 let plasmaBuf, filaBuf; const BUFN = 96;
 const PANELW = 272;
@@ -369,18 +370,22 @@ function fx_bloom(P,r,R,t,lod,seed){
   let w=OPTS.bloomOpacity*lod; if(w<=0.001) return;
   let sd = (seed!=null) ? seed : 42;                                  // fixed example seed for the single-sun preview
   let rnd = OPTS.bloomRandom;
-  let ang     = rnd ? hash01(sd*1.13)*TWO_PI       : OPTS.bloomAngle*TWO_PI;   // initial angle
-  let spd     = rnd ? (0.3 + hash01(sd*2.71+1.7)*1.4) : 1;                     // animation speed
-  let lenMult = rnd ? hash01(sd*3.77+5.5)*5        : OPTS.bloomLen;            // spike length 0..5
-  let pph     = rnd ? hash01(sd*5.19+9.3)*TWO_PI   : 0;                        // pulse phase
+  let randAng = rnd && !OPTS.bloomLockAngle;                                                  // per-star initial orientation
+  let randRot = rnd && !OPTS.bloomLockRot;                                                    // per-star rotation speed
+  let angJit = randAng ? ((hash01(sd*1.91)<0.5?-1:1) * (1 + hash01(sd*1.13)*44) * (PI/180)) : 0;  // initial angle jitter +/-1..45 deg
+  let spd    = randRot ? (0.3 + hash01(sd*2.71+1.7)*1.4) : 1;                                 // pulse speed (rotation base)
+  let rotSpd = OPTS.bloomLockRot ? 0 : spd;                                                    // rotation drift — locked = 0 (frozen, no spin)
+  let lenPh  = rnd ? hash01(sd*3.77+5.5)*TWO_PI      : 0;                                     // random initial spike length (phase)
+  let growR  = rnd ? hash01(sd*4.31+2.9)*5           : 0;                                     // spike grow/shrink rate 0..5
   P.push(); P.blendMode(ADD); P.noStroke();
-  P.rotate(ang + t*0.0005*OPTS.rot*spd);
+  P.rotate(OPTS.bloomAngle*TWO_PI + angJit + t*0.0005*OPTS.rot*rotSpd);
   if(OPTS.bloomGlow){                                                 // built-in center glow — off to de-dup with the Glow layer
     let g=P.drawingContext.createRadialGradient(0,0,0,0,0,r*2.6);
     g.addColorStop(0,rgba([255,250,235],0.9*w)); g.addColorStop(0.4,rgba(R,0.4*w)); g.addColorStop(1,rgba(R,0));
     P.drawingContext.fillStyle=g; P.circle(0,0,r*5.2);
   }
-  let L=r*lenMult, tw=r*OPTS.bloomThick, pulse=0.85+0.15*sin(t*0.05*spd + pph);
+  let lenMult = rnd ? (2.0 + 2.0*sin(lenPh + t*growR*0.01)) : OPTS.bloomLen;   // oscillates 0..4 at growR (rate 0 = static random len)
+  let L=r*lenMult, tw=r*OPTS.bloomThick, pulse=0.85+0.15*sin(t*0.05*spd + lenPh);
   for(let s=0;s<2;s++){ P.push(); P.rotate(s*HALF_PI);
     let lg=P.drawingContext.createLinearGradient(-L,0,L,0);
     lg.addColorStop(0,rgba([255,250,235],0)); lg.addColorStop(0.5,rgba([255,250,235],0.5*pulse*w)); lg.addColorStop(1,rgba([255,250,235],0));
@@ -437,7 +442,7 @@ const SUN_SCHEMA = [
   ['Streamers', [['streamersOn','Streamers','bool'],['streamersOpacity','Opacity','range',0,1,0.01],
     ['streamerCount','Count','range',3,30,1],['streamerLen','Length','range',1,6,0.1]]],
   ['Bloom (diffraction)', [['bloomOn','Bloom','bool'],['bloomOpacity','Opacity','range',0,1,0.01],
-    ['bloomLen','Spike length','range',1,10,0.1],['bloomThick','Spike thick','range',0.02,0.5,0.01],['bloomGlow','Center glow','bool'],['bloomAngle','Angle','range',0,1,0.01],['bloomRandom','Randomize/star','bool']]],
+    ['bloomLen','Spike length','range',1,10,0.1],['bloomThick','Spike thick','range',0.02,0.5,0.01],['bloomGlow','Center glow','bool'],['bloomAngle','Angle','range',0,1,0.01],['bloomRandom','Randomize/star','bool'],['bloomLockAngle','Lock angle','bool'],['bloomLockRot','Lock rotation','bool']]],
   ['Chromosphere rim', [['rimOn','Rim','bool'],['rimOpacity','Opacity','range',0,1,0.01],['rimThick','Thickness','range',0.01,0.2,0.005]]],
   ['Prominence', [['promOn','Prominence','bool'],['promOpacity','Opacity','range',0,1,0.01],['promCount','Count','range',1,12,1],['promHeight','Height','range',1,2.5,0.05]]],
   ['Embers', [['embersOn','Embers','bool'],['embersOpacity','Opacity','range',0,1,0.01],['embersCount','Count','range',10,200,5]]],
