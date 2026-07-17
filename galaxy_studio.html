@@ -62,7 +62,7 @@
 
 let ACTIVE_PRESET = 'full_rich';   // starting sun preset
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '05';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '07';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -81,7 +81,7 @@ let CFG = {
     // STREAMERS
     streamersOn: true, streamersOpacity: 0.5, streamerCount: 14, streamerLen: 3.4,
     // BLOOM (diffraction)
-    bloomOn: true, bloomOpacity: 0.9, bloomLen: 4.5, bloomThick: 0.14, bloomAngle: 0.13,
+    bloomOn: true, bloomOpacity: 0.9, bloomLen: 4.5, bloomThick: 0.14, bloomAngle: 0.13, bloomGlow: true, bloomRandom: false,
     // CHROMOSPHERE RIM
     rimOn: true, rimOpacity: 0.6, rimThick: 0.06,
     // PROMINENCE
@@ -162,8 +162,8 @@ function drawGalaxyView(){
     if(s.x<vMinX-m || s.x>vMaxX+m || s.y<vMinY-m || s.y>vMaxY+m) continue;
     if(baked){
       imageMode(CENTER); let sz=SUN_SPRITE_SZ*(wr/SUN_REF); image(getSunSprite(s.color), s.x, s.y, sz, sz);   // baked layers: 1 blit
-      if(liveOverlay) drawTheSun(s.x, s.y, wr, frameCount, s.color, wr*cam.zoom, null, 'live');                 // non-baked layers, animated
-    } else drawTheSun(s.x, s.y, wr, frameCount, s.color, wr*cam.zoom);                                          // fully live
+      if(liveOverlay) drawTheSun(s.x, s.y, wr, frameCount, s.color, wr*cam.zoom, null, 'live', s.seed);         // non-baked layers, animated (per-star seed)
+    } else drawTheSun(s.x, s.y, wr, frameCount, s.color, wr*cam.zoom, null, null, s.seed);                       // fully live
     drawn++;
   }
   pop();
@@ -281,6 +281,7 @@ function resetFpsRecords(){
 
 // ---------- helpers ----------
 function frac(x){ return x - Math.floor(x); }
+function hash01(s){ let x=Math.sin(s*12.9898)*43758.5453; return x-Math.floor(x); }   // 0..1 pseudo-random per seed
 function rgba(c,a){ return 'rgba('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+a+')'; }
 function bakePlasma(){ let g=plasmaBuf; g.loadPixels(); let n=BUFN, cc=(n-1)/2, R=n/2;
   for(let y=0;y<n;y++) for(let x=0;x<n;x++){ let nv=noise(x*0.045,y*0.045,3.1); let bri=90+nv*165;
@@ -306,7 +307,7 @@ function layerOn(layer, filter){
   return filter==='bake' ? baked : !baked;
 }
 // g = target graphics (offscreen buffer when baking); defaults to the main canvas (window) for live draw
-function drawTheSun(cx,cy,r,t,col,lodR,g,filter){
+function drawTheSun(cx,cy,r,t,col,lodR,g,filter,seed){
   let P = g || window;
   let R = col || OPTS.sunColor;
   let lr = (lodR!=null) ? lodR : r;                                 // on-screen radius drives LOD (galaxy view passes r*zoom)
@@ -315,7 +316,7 @@ function drawTheSun(cx,cy,r,t,col,lodR,g,filter){
   P.push(); P.translate(cx,cy);
   if(layerOn('glow',filter))      fx_glow(P,r,R,lodH);
   if(layerOn('streamers',filter)) fx_streamers(P,r,R,t,lodH);
-  if(layerOn('bloom',filter))     fx_bloom(P,r,R,t,lodH);
+  if(layerOn('bloom',filter))     fx_bloom(P,r,R,t,lodH,seed);
   if(layerOn('core',filter))      fx_core(P,r,R,t,lodC);
   if(layerOn('rim',filter))       fx_rim(P,r,R,lodC);
   if(layerOn('prom',filter))      fx_prominence(P,r,R,t,lodH);
@@ -364,14 +365,22 @@ function fx_streamers(P,r,R,t,lod){
   }
   P.pop(); P.blendMode(BLEND);
 }
-function fx_bloom(P,r,R,t,lod){
+function fx_bloom(P,r,R,t,lod,seed){
   let w=OPTS.bloomOpacity*lod; if(w<=0.001) return;
+  let sd = (seed!=null) ? seed : 42;                                  // fixed example seed for the single-sun preview
+  let rnd = OPTS.bloomRandom;
+  let ang     = rnd ? hash01(sd*1.13)*TWO_PI       : OPTS.bloomAngle*TWO_PI;   // initial angle
+  let spd     = rnd ? (0.3 + hash01(sd*2.71+1.7)*1.4) : 1;                     // animation speed
+  let lenMult = rnd ? hash01(sd*3.77+5.5)*5        : OPTS.bloomLen;            // spike length 0..5
+  let pph     = rnd ? hash01(sd*5.19+9.3)*TWO_PI   : 0;                        // pulse phase
   P.push(); P.blendMode(ADD); P.noStroke();
-  P.rotate(OPTS.bloomAngle*TWO_PI + t*0.0005*OPTS.rot);
-  let g=P.drawingContext.createRadialGradient(0,0,0,0,0,r*2.6);
-  g.addColorStop(0,rgba([255,250,235],0.9*w)); g.addColorStop(0.4,rgba(R,0.4*w)); g.addColorStop(1,rgba(R,0));
-  P.drawingContext.fillStyle=g; P.circle(0,0,r*5.2);
-  let L=r*OPTS.bloomLen, tw=r*OPTS.bloomThick, pulse=0.85+0.15*sin(t*0.05);
+  P.rotate(ang + t*0.0005*OPTS.rot*spd);
+  if(OPTS.bloomGlow){                                                 // built-in center glow — off to de-dup with the Glow layer
+    let g=P.drawingContext.createRadialGradient(0,0,0,0,0,r*2.6);
+    g.addColorStop(0,rgba([255,250,235],0.9*w)); g.addColorStop(0.4,rgba(R,0.4*w)); g.addColorStop(1,rgba(R,0));
+    P.drawingContext.fillStyle=g; P.circle(0,0,r*5.2);
+  }
+  let L=r*lenMult, tw=r*OPTS.bloomThick, pulse=0.85+0.15*sin(t*0.05*spd + pph);
   for(let s=0;s<2;s++){ P.push(); P.rotate(s*HALF_PI);
     let lg=P.drawingContext.createLinearGradient(-L,0,L,0);
     lg.addColorStop(0,rgba([255,250,235],0)); lg.addColorStop(0.5,rgba([255,250,235],0.5*pulse*w)); lg.addColorStop(1,rgba([255,250,235],0));
@@ -428,7 +437,7 @@ const SUN_SCHEMA = [
   ['Streamers', [['streamersOn','Streamers','bool'],['streamersOpacity','Opacity','range',0,1,0.01],
     ['streamerCount','Count','range',3,30,1],['streamerLen','Length','range',1,6,0.1]]],
   ['Bloom (diffraction)', [['bloomOn','Bloom','bool'],['bloomOpacity','Opacity','range',0,1,0.01],
-    ['bloomLen','Spike length','range',1,10,0.1],['bloomThick','Spike thick','range',0.02,0.5,0.01],['bloomAngle','Angle','range',0,1,0.01]]],
+    ['bloomLen','Spike length','range',1,10,0.1],['bloomThick','Spike thick','range',0.02,0.5,0.01],['bloomGlow','Center glow','bool'],['bloomAngle','Angle','range',0,1,0.01],['bloomRandom','Randomize/star','bool']]],
   ['Chromosphere rim', [['rimOn','Rim','bool'],['rimOpacity','Opacity','range',0,1,0.01],['rimThick','Thickness','range',0.01,0.2,0.005]]],
   ['Prominence', [['promOn','Prominence','bool'],['promOpacity','Opacity','range',0,1,0.01],['promCount','Count','range',1,12,1],['promHeight','Height','range',1,2.5,0.05]]],
   ['Embers', [['embersOn','Embers','bool'],['embersOpacity','Opacity','range',0,1,0.01],['embersCount','Count','range',10,200,5]]],
