@@ -39,5 +39,8 @@ Each Phase-2 subsystem repeats one move: refactor to read `CFG` → add schema p
 
 ## Status
 - [x] **Phase 0 — shell** (2026-07-17): `galaxy_studio.html` seeded; namespaced `CFG`, 6-page nav, OPTIONS↔VIEW GALAXY toggle, export/import CFG JSON. Galaxy view = teaser suns for now.
-- [ ] Phase 1 — galaxy gen page + basic star view *(next)*
-- Everything after: not started.
+- [x] **Phase 1 — galaxy gen + basic star view** (2026-07-17, build .02): `CFG.gen` + Galaxy Gen page (stars, radius, min-spacing, generator toggle, star size, 6-weight spectral mix, jitter); `generateGalaxy()` (galaxy_01 min-dist + IE-uniform placeholder); VIEW GALAXY renders stars with per-star spectral color + camera pan/zoom + viewport culling; live regen + reroll. On branch `phase-1`.
+- [x] **Baked galaxy renderer** (2026-07-17, build .04): per-spectral-color sun-sprite cache, toggle "Baked render" in Galaxy Gen; effect fns thread a target-graphics so the same code bakes offscreen. 1 blit/star → **300 systems @ 60 fps** (live mode capped ~80). Tradeoffs: static sprites (no per-frame anim), no zoom-LOD crossfade in baked mode.
+- Perf saga (resolved): root cause was **Chrome GPU accel disabled** (environment, not code); then `pixelDensity(1)`; then baked sprites vs the per-star gradient storm.
+- [ ] Phase 2+ — backdrop, lanes, traffic, economy *(next: pick one)*
+- Refinements queued: real IE generator (uniform placeholder now); baked-mode animation (rotate the sprite) + optional LOD; qColor quantization tune (37 sprites @ /12).

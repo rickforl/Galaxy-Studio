@@ -39,6 +39,8 @@
   #panel input[type=color]{width:44px;height:18px;border:1px solid #2a3a58;background:none;padding:0;}
   #panel select{flex:1;min-width:0;background:#0c1524;color:#dfe8f8;border:1px solid #3a5a8c;font:11px 'Consolas',monospace;padding:1px;}
   #panel .hint{color:#5f6f8c;margin-top:10px;font-size:10px;line-height:1.4;}
+  #panel .act-btn{width:100%;background:#16233b;color:#cdd9ef;border:1px solid #3a5a8c;font:11px 'Consolas',monospace;padding:5px;cursor:pointer;margin-top:10px;}
+  #panel .act-btn:hover{background:#1e2f4d;}
 </style>
 </head><body>
 <div id="topbar">
@@ -60,7 +62,7 @@
 
 let ACTIVE_PRESET = 'full_rich';   // starting sun preset
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '01';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '04';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -87,7 +89,9 @@ let CFG = {
     // EMBERS
     embersOn: true, embersOpacity: 0.7, embersCount: 90
   },
-  gen: {}, backdrop: {}, lanes: {}, traffic: {}, economy: {}   // filled in later phases
+  gen: { starCount: 60, radius: 1200, minDist: 130, useGalaxy01: true, starSize: 12, seed: 1234, bakedRender: true,
+         wM: 1, wK: 1, wG: 1, wF: 1, wB: 1, wO: 1, jitter: 15 },
+  backdrop: {}, lanes: {}, traffic: {}, economy: {}   // filled in later phases
 };
 let OPTS = CFG.sun;                                 // sun renderer reads OPTS (=== CFG.sun) — unchanged downstream
 const BASE = JSON.parse(JSON.stringify(CFG.sun));   // sun defaults — preset switching resets to these first
@@ -106,6 +110,7 @@ let plasmaBuf, filaBuf; const BUFN = 96;
 const PANELW = 272;
 
 function setup(){
+  pixelDensity(1);   // hi-DPI (devicePixelRatio 1.5) would render at 2.25x pixels — pin to 1x for the FPS floor
   createCanvas(windowWidth, windowHeight);
   let urlp = new URLSearchParams(location.search).get('preset');   // ?preset=NAME override
   if (urlp && PRESETS[urlp]) ACTIVE_PRESET = urlp;
@@ -121,6 +126,7 @@ function setup(){
   document.getElementById('fps-pill').onclick = toggleFpsSheet;
   document.getElementById('build-pill').textContent = BUILD_ID;
   loadFpsRecords();
+  regenerate();                 // build the initial galaxy
   updateModeBtn();
 }
 function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
@@ -139,16 +145,79 @@ function drawSunPreview(){
   text('r = ' + OPTS.previewR + (OPTS.lodOn ? '   (LOD weighting ON)' : ''), cx, height - 16);
 }
 function drawGalaxyView(){
-  // Phase 0 teaser — a few scattered suns using the current sun settings.
-  // Phase 1 replaces this with generateGalaxy(CFG.gen) + pan/zoom + culling.
   background(4,5,9);
-  let cx0 = PANELW + (width - PANELW) / 2, cy0 = height / 2;
-  const T = [[-0.36,-0.22,0.5],[0.26,-0.30,0.75],[0.40,0.24,0.45],[-0.22,0.32,0.6],[0.04,0.0,1.0],[-0.44,0.06,0.4],[0.34,-0.02,0.55],[0.12,0.34,0.5]];
-  for(const s of T){ let x=cx0+s[0]*(width-PANELW)*0.42, y=cy0+s[1]*height*0.42, r=OPTS.previewR*0.35*s[2];
-    drawTheSun(x, y, r, frameCount); }
-  blendMode(BLEND); noStroke(); textAlign(CENTER, CENTER); fill(150,170,205); textSize(13);
-  text('VIEW GALAXY — Phase 0 shell (teaser suns). Phase 1 adds real generation + pan/zoom.', cx0, height - 40);
+  let playX=(PANELW+width)/2, playY=height/2, playW=width-PANELW;
+  let hw=playW/(2*cam.zoom), hh=height/(2*cam.zoom);
+  let vMinX=-cam.x-hw, vMaxX=-cam.x+hw, vMinY=-cam.y-hh, vMaxY=-cam.y+hh;   // visible world rect (cull)
+  let baked = CFG.gen.bakedRender;
+  push();
+  translate(playX, playY); translate(cam.x*cam.zoom, cam.y*cam.zoom); scale(cam.zoom);
+  if(baked) imageMode(CENTER);
+  let drawn=0;
+  for(const s of galaxy){
+    let wr = CFG.gen.starSize * (1 + (s.tier-1)*0.35);        // world star radius by tier
+    let m = wr*6;                                             // cull margin for halos
+    if(s.x<vMinX-m || s.x>vMaxX+m || s.y<vMinY-m || s.y>vMaxY+m) continue;
+    if(baked){ let sz=SUN_SPRITE_SZ*(wr/SUN_REF); image(getSunSprite(s.color), s.x, s.y, sz, sz); }   // 1 blit/star
+    else drawTheSun(s.x, s.y, wr, frameCount, s.color, wr*cam.zoom);                                   // live gradients
+    drawn++;
+  }
+  pop();
+  blendMode(BLEND); noStroke(); textAlign(LEFT, TOP); fill(120,140,175); textSize(11);
+  text(galaxy.length+' stars · '+drawn+' drawn · '+(baked?'BAKED':'live')+' · '+sunSpriteCache.size+' sprites · zoom '+cam.zoom.toFixed(2)+'   [drag/wheel]', PANELW+12, 40);
 }
+
+// ---------- Phase 1: galaxy generation + camera ----------
+let galaxy = [];                        // [{x,y,tier,color,seed}]
+let cam = { x: 0, y: 0, zoom: 0.35 };   // world offset + zoom for the galaxy view
+const SPECTRAL = [['M',[255,50,50]],['K',[255,140,0]],['G',[255,255,0]],['F',[240,240,255]],['B',[50,100,255]],['O',[150,50,255]]];
+function randomSpectral(g){
+  let w=[g.wM,g.wK,g.wG,g.wF,g.wB,g.wO], tot=(w[0]+w[1]+w[2]+w[3]+w[4]+w[5])||1, rr=random()*tot, acc=0, base=SPECTRAL[4][1];
+  for(let i=0;i<6;i++){ acc+=w[i]; if(rr<=acc){ base=SPECTRAL[i][1]; break; } }
+  let j=g.jitter;
+  return [constrain(base[0]+random(-j,j),0,255), constrain(base[1]+random(-j,j),0,255), constrain(base[2]+random(-j,j),0,255)];
+}
+function generateGalaxy(g){
+  randomSeed(g.seed|0);
+  galaxy=[];
+  let N=g.starCount|0, R=g.radius, minD=g.minDist;
+  let nT3=Math.round(N*0.03), nT2=Math.round(N*0.13), nT1=N-nT2-nT3;
+  let tiers=[]; for(let i=0;i<nT1;i++)tiers.push(1); for(let i=0;i<nT2;i++)tiers.push(2); for(let i=0;i<nT3;i++)tiers.push(3);
+  for(let i=tiers.length-1;i>0;i--){ let jx=Math.floor(random()*(i+1)); let tmp=tiers[i]; tiers[i]=tiers[jx]; tiers[jx]=tmp; }
+  let placed=0, attempts=0, capA=N*300;
+  while(placed<N && attempts<capA){
+    attempts++;
+    let x,y;
+    if(g.useGalaxy01){                     // galaxy_01 rules: continuous, min-distance reject
+      x=random(-R,R); y=random(-R,R); if(x*x+y*y>R*R) continue;
+      let ok=true; for(const s of galaxy){ let dx=s.x-x, dy=s.y-y; if(dx*dx+dy*dy<minD*minD){ ok=false; break; } }
+      if(!ok) continue;
+    } else {                               // IE (placeholder): uniform across the disc, no min-dist
+      let a=random(TWO_PI), rr=R*Math.sqrt(random()); x=cos(a)*rr; y=sin(a)*rr;
+    }
+    galaxy.push({ x, y, tier: tiers[placed]||1, color: randomSpectral(g), seed: placed*997+1 });
+    placed++;
+  }
+}
+// ---------- baked sun sprites (per spectral-color cache) for VIEW GALAXY ----------
+const SUN_REF = 40, SUN_SPRITE_SZ = 640;   // sprite baked at radius SUN_REF; buffer holds the halos
+let sunSpriteCache = new Map();
+function invalidateSunSprites(){ sunSpriteCache.clear(); }   // called when a sun setting changes -> re-bake lazily
+function qColor(c){ return (Math.round(c[0]/12)*12)+','+(Math.round(c[1]/12)*12)+','+(Math.round(c[2]/12)*12); }
+function getSunSprite(color){
+  let key=qColor(color); let spr=sunSpriteCache.get(key);
+  if(spr) return spr;
+  spr=createGraphics(SUN_SPRITE_SZ, SUN_SPRITE_SZ); spr.pixelDensity(1);
+  let sc=OPTS.sunColor, sl=OPTS.lodOn; OPTS.sunColor=color; OPTS.lodOn=false;   // bake full-strength composite in this color
+  drawTheSun(SUN_SPRITE_SZ/2, SUN_SPRITE_SZ/2, SUN_REF, 0, color, null, spr);   // frozen frame -> static sprite
+  OPTS.sunColor=sc; OPTS.lodOn=sl;
+  sunSpriteCache.set(key, spr);
+  return spr;
+}
+function regenerate(){ generateGalaxy(CFG.gen); }
+function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); regenerate(); }
+function mouseDragged(){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; } }
+function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); return false; } }
 function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); }
 function updateModeBtn(){ let b=document.getElementById('mode-btn'); if(b) b.innerHTML = (viewMode==='options') ? '&#9654; VIEW GALAXY' : '&#9664; OPTIONS'; }
 function exportCFG(){
@@ -224,113 +293,116 @@ function bakeFilament(){ let g=filaBuf; g.loadPixels(); let n=BUFN, cc=(n-1)/2, 
 }
 
 // ---------- composite ----------
-function drawTheSun(cx,cy,r,t){
-  let R = OPTS.sunColor;
-  let lodH = OPTS.lodOn ? constrain(map(r,20,70,1,0),0,1) : 1;      // halo weight (fades in as you zoom OUT)
-  let lodC = OPTS.lodOn ? constrain(map(r,7,70,0.25,1),0,1) : 1;    // core weight (fades in as you zoom IN)
-  push(); translate(cx,cy);
-  if(OPTS.glowOn)      fx_glow(r,R,lodH);
-  if(OPTS.streamersOn) fx_streamers(r,R,t,lodH);
-  if(OPTS.bloomOn)     fx_bloom(r,R,t,lodH);
-  if(OPTS.coreOn)      fx_core(r,R,t,lodC);
-  if(OPTS.rimOn)       fx_rim(r,R,lodC);
-  if(OPTS.promOn)      fx_prominence(r,R,t,lodH);
-  if(OPTS.embersOn)    fx_embers(r,R,t,lodH);
-  pop(); blendMode(BLEND);
+// g = target graphics (offscreen buffer when baking); defaults to the main canvas (window) for live draw
+function drawTheSun(cx,cy,r,t,col,lodR,g){
+  let P = g || window;
+  let R = col || OPTS.sunColor;
+  let lr = (lodR!=null) ? lodR : r;                                 // on-screen radius drives LOD (galaxy view passes r*zoom)
+  let lodH = OPTS.lodOn ? constrain(map(lr,20,70,1,0),0,1) : 1;     // halo weight (fades in as you zoom OUT)
+  let lodC = OPTS.lodOn ? constrain(map(lr,7,70,0.25,1),0,1) : 1;   // core weight (fades in as you zoom IN)
+  P.push(); P.translate(cx,cy);
+  if(OPTS.glowOn)      fx_glow(P,r,R,lodH);
+  if(OPTS.streamersOn) fx_streamers(P,r,R,t,lodH);
+  if(OPTS.bloomOn)     fx_bloom(P,r,R,t,lodH);
+  if(OPTS.coreOn)      fx_core(P,r,R,t,lodC);
+  if(OPTS.rimOn)       fx_rim(P,r,R,lodC);
+  if(OPTS.promOn)      fx_prominence(P,r,R,t,lodH);
+  if(OPTS.embersOn)    fx_embers(P,r,R,t,lodH);
+  P.pop(); P.blendMode(BLEND);
 }
 
-function fx_core(r,R,t,lod){
+function fx_core(P,r,R,t,lod){
   let cw = OPTS.coreOpacity*lod; if(cw<=0.001) return;
   let e = constrain(1-OPTS.edge, 0.02, 1.0);
-  push(); noStroke(); blendMode(BLEND);
-  let sg=drawingContext.createRadialGradient(0,0,r*0.05,0,0,r);
+  P.push(); P.noStroke(); P.blendMode(BLEND);
+  let sg=P.drawingContext.createRadialGradient(0,0,r*0.05,0,0,r);
   sg.addColorStop(0,               rgba([255,252,235],cw));
   sg.addColorStop(min(0.45,e*0.7), rgba(R,cw));
   sg.addColorStop(e,               rgba([R[0]*0.55,R[1]*0.30,R[2]*0.12],cw));
   sg.addColorStop(1,               rgba([R[0]*0.55,R[1]*0.30,R[2]*0.12],0));
-  drawingContext.fillStyle=sg; circle(0,0,r*2);
-  if(OPTS.plasmaOn){ push(); imageMode(CENTER); blendMode(BLEND); rotate(t*0.003*OPTS.rot);
-    tint(R[0],R[1],R[2],255*OPTS.plasmaOpacity*lod); image(plasmaBuf,0,0,r*2,r*2); noTint(); pop(); }
-  if(OPTS.filamentOn){ push(); imageMode(CENTER); blendMode(ADD); rotate(-t*0.002*OPTS.rot);
-    tint(R[0],R[1],R[2],255*OPTS.filamentOpacity*lod); image(filaBuf,0,0,r*2,r*2); noTint(); pop(); blendMode(BLEND); }
-  if(OPTS.specOn){ let hs=drawingContext.createRadialGradient(-r*0.18,-r*0.18,0,-r*0.18,-r*0.18,r*0.6);
+  P.drawingContext.fillStyle=sg; P.circle(0,0,r*2);
+  if(OPTS.plasmaOn){ P.push(); P.imageMode(CENTER); P.blendMode(BLEND); P.rotate(t*0.003*OPTS.rot);
+    P.tint(R[0],R[1],R[2],255*OPTS.plasmaOpacity*lod); P.image(plasmaBuf,0,0,r*2,r*2); P.noTint(); P.pop(); }
+  if(OPTS.filamentOn){ P.push(); P.imageMode(CENTER); P.blendMode(ADD); P.rotate(-t*0.002*OPTS.rot);
+    P.tint(R[0],R[1],R[2],255*OPTS.filamentOpacity*lod); P.image(filaBuf,0,0,r*2,r*2); P.noTint(); P.pop(); P.blendMode(BLEND); }
+  if(OPTS.specOn){ let hs=P.drawingContext.createRadialGradient(-r*0.18,-r*0.18,0,-r*0.18,-r*0.18,r*0.6);
     hs.addColorStop(0,rgba([255,255,245],0.32*cw)); hs.addColorStop(1,rgba([255,255,245],0));
-    drawingContext.fillStyle=hs; circle(-r*0.18,-r*0.18,r*1.2); }
-  pop();
+    P.drawingContext.fillStyle=hs; P.circle(-r*0.18,-r*0.18,r*1.2); }
+  P.pop();
 }
-function fx_glow(r,R,lod){
+function fx_glow(P,r,R,lod){
   let w=OPTS.glowOpacity*lod; if(w<=0.001) return;
-  push(); blendMode(ADD); noStroke();
-  let g=drawingContext.createRadialGradient(0,0,r*0.2,0,0,r*OPTS.glowSize);
+  P.push(); P.blendMode(ADD); P.noStroke();
+  let g=P.drawingContext.createRadialGradient(0,0,r*0.2,0,0,r*OPTS.glowSize);
   g.addColorStop(0,rgba([255,240,200],0.5*w)); g.addColorStop(0.35,rgba(R,0.16*w)); g.addColorStop(1,rgba([255,90,0],0));
-  drawingContext.fillStyle=g; circle(0,0,r*OPTS.glowSize*2.1);
-  pop(); blendMode(BLEND);
+  P.drawingContext.fillStyle=g; P.circle(0,0,r*OPTS.glowSize*2.1);
+  P.pop(); P.blendMode(BLEND);
 }
-function fx_streamers(r,R,t,lod){
+function fx_streamers(P,r,R,t,lod){
   let w=OPTS.streamersOpacity*lod; if(w<=0.001) return;
-  push(); blendMode(ADD); rotate(t*0.0015*OPTS.rot); noStroke();
+  P.push(); P.blendMode(ADD); P.rotate(t*0.0015*OPTS.rot); P.noStroke();
   let N=OPTS.streamerCount;
   for(let i=0;i<N;i++){ let a=i/N*TWO_PI;
     let len=r*OPTS.streamerLen*(0.6+0.4*(0.5+0.5*sin(i*2.3+t*0.01)));
-    push(); rotate(a);
-    let g=drawingContext.createLinearGradient(0,0,len,0); g.addColorStop(0,rgba(R,0.2*w)); g.addColorStop(1,rgba(R,0));
-    drawingContext.fillStyle=g; let wd=r*0.5;
-    beginShape(); vertex(0,-wd*0.3); vertex(len,-wd); vertex(len,wd); vertex(0,wd*0.3); endShape(CLOSE);
-    pop();
+    P.push(); P.rotate(a);
+    let g=P.drawingContext.createLinearGradient(0,0,len,0); g.addColorStop(0,rgba(R,0.2*w)); g.addColorStop(1,rgba(R,0));
+    P.drawingContext.fillStyle=g; let wd=r*0.5;
+    P.beginShape(); P.vertex(0,-wd*0.3); P.vertex(len,-wd); P.vertex(len,wd); P.vertex(0,wd*0.3); P.endShape(CLOSE);
+    P.pop();
   }
-  pop(); blendMode(BLEND);
+  P.pop(); P.blendMode(BLEND);
 }
-function fx_bloom(r,R,t,lod){
+function fx_bloom(P,r,R,t,lod){
   let w=OPTS.bloomOpacity*lod; if(w<=0.001) return;
-  push(); blendMode(ADD); noStroke();
-  rotate(OPTS.bloomAngle*TWO_PI + t*0.0005*OPTS.rot);
-  let g=drawingContext.createRadialGradient(0,0,0,0,0,r*2.6);
+  P.push(); P.blendMode(ADD); P.noStroke();
+  P.rotate(OPTS.bloomAngle*TWO_PI + t*0.0005*OPTS.rot);
+  let g=P.drawingContext.createRadialGradient(0,0,0,0,0,r*2.6);
   g.addColorStop(0,rgba([255,250,235],0.9*w)); g.addColorStop(0.4,rgba(R,0.4*w)); g.addColorStop(1,rgba(R,0));
-  drawingContext.fillStyle=g; circle(0,0,r*5.2);
+  P.drawingContext.fillStyle=g; P.circle(0,0,r*5.2);
   let L=r*OPTS.bloomLen, tw=r*OPTS.bloomThick, pulse=0.85+0.15*sin(t*0.05);
-  for(let s=0;s<2;s++){ push(); rotate(s*HALF_PI);
-    let lg=drawingContext.createLinearGradient(-L,0,L,0);
+  for(let s=0;s<2;s++){ P.push(); P.rotate(s*HALF_PI);
+    let lg=P.drawingContext.createLinearGradient(-L,0,L,0);
     lg.addColorStop(0,rgba([255,250,235],0)); lg.addColorStop(0.5,rgba([255,250,235],0.5*pulse*w)); lg.addColorStop(1,rgba([255,250,235],0));
-    drawingContext.fillStyle=lg; rect(-L,-tw/2,2*L,tw); pop();
+    P.drawingContext.fillStyle=lg; P.rect(-L,-tw/2,2*L,tw); P.pop();
   }
-  for(let s=0;s<2;s++){ push(); rotate(QUARTER_PI+s*HALF_PI);
-    let lg=drawingContext.createLinearGradient(-L*0.6,0,L*0.6,0);
+  for(let s=0;s<2;s++){ P.push(); P.rotate(QUARTER_PI+s*HALF_PI);
+    let lg=P.drawingContext.createLinearGradient(-L*0.6,0,L*0.6,0);
     lg.addColorStop(0,rgba(R,0)); lg.addColorStop(0.5,rgba(R,0.2*pulse*w)); lg.addColorStop(1,rgba(R,0));
-    drawingContext.fillStyle=lg; rect(-L*0.6,-tw*0.4,L*1.2,tw*0.8); pop();
+    P.drawingContext.fillStyle=lg; P.rect(-L*0.6,-tw*0.4,L*1.2,tw*0.8); P.pop();
   }
-  pop(); blendMode(BLEND);
+  P.pop(); P.blendMode(BLEND);
 }
-function fx_rim(r,R,lod){
+function fx_rim(P,r,R,lod){
   let w=OPTS.rimOpacity*lod; if(w<=0.001) return;
-  push(); noFill(); blendMode(ADD);
-  strokeWeight(max(r*OPTS.rimThick,1)); stroke(rgba([255,120,60],0.5*w)); circle(0,0,r*2*0.99);
-  strokeWeight(max(r*OPTS.rimThick*0.5,0.6)); stroke(rgba([255,220,180],0.6*w)); circle(0,0,r*2*0.985);
-  pop(); blendMode(BLEND);
+  P.push(); P.noFill(); P.blendMode(ADD);
+  P.strokeWeight(max(r*OPTS.rimThick,1)); P.stroke(rgba([255,120,60],0.5*w)); P.circle(0,0,r*2*0.99);
+  P.strokeWeight(max(r*OPTS.rimThick*0.5,0.6)); P.stroke(rgba([255,220,180],0.6*w)); P.circle(0,0,r*2*0.985);
+  P.pop(); P.blendMode(BLEND);
 }
-function fx_prominence(r,R,t,lod){
+function fx_prominence(P,r,R,t,lod){
   let w=OPTS.promOpacity*lod; if(w<=0.001) return;
-  push(); blendMode(ADD); noFill();
+  P.push(); P.blendMode(ADD); P.noFill();
   let N=OPTS.promCount;
   for(let i=0;i<N;i++){ let a=i/N*TWO_PI + (noise(i*3.1)*0.6-0.3) + t*0.003*OPTS.rot;
     let spread=0.16+noise(i*1.7)*0.16;
     let fx=cos(a-spread)*r, fy=sin(a-spread)*r, gx=cos(a+spread)*r, gy=sin(a+spread)*r;
     let h=r*OPTS.promHeight*(0.85 + (0.5+0.5*sin(t*0.05+i*1.3))*0.4*(0.5+noise(i*2.3)));
-    strokeWeight(max(r*0.035,1)); stroke(255,120+40*sin(t*0.05+i),50,150*w);
-    beginShape(); vertex(fx,fy); quadraticVertex(cos(a)*h,sin(a)*h,gx,gy); endShape();
+    P.strokeWeight(max(r*0.035,1)); P.stroke(255,120+40*sin(t*0.05+i),50,150*w);
+    P.beginShape(); P.vertex(fx,fy); P.quadraticVertex(cos(a)*h,sin(a)*h,gx,gy); P.endShape();
   }
-  pop(); blendMode(BLEND);
+  P.pop(); P.blendMode(BLEND);
 }
-function fx_embers(r,R,t,lod){
+function fx_embers(P,r,R,t,lod){
   let w=OPTS.embersOpacity*lod; if(w<=0.001) return;
-  push(); blendMode(ADD); noStroke();
+  P.push(); P.blendMode(ADD); P.noStroke();
   let N=OPTS.embersCount;
   for(let i=0;i<N;i++){ let rnd=frac(sin(i*127.1)*43758.5), rnd2=frac(sin(i*311.7)*24634.6);
     let a=(i/N)*TWO_PI + t*0.01*OPTS.rot*(0.5+rnd2);
     let rad=r*(0.9+1.3*rnd)+sin(t*0.03+i)*r*0.1;
     let x=cos(a)*rad, y=sin(a)*rad; let br=constrain(1-rad/(r*2.2),0,1);
-    fill(255,150+br*90,50,(20+br*150)*w); circle(x,y,0.8+br*2.2);
+    P.fill(255,150+br*90,50,(20+br*150)*w); P.circle(x,y,0.8+br*2.2);
   }
-  pop(); blendMode(BLEND);
+  P.pop(); P.blendMode(BLEND);
 }
 
 // ---------- options panel (generated from schema) ----------
@@ -349,9 +421,15 @@ const SUN_SCHEMA = [
   ['Prominence', [['promOn','Prominence','bool'],['promOpacity','Opacity','range',0,1,0.01],['promCount','Count','range',1,12,1],['promHeight','Height','range',1,2.5,0.05]]],
   ['Embers', [['embersOn','Embers','bool'],['embersOpacity','Opacity','range',0,1,0.01],['embersCount','Count','range',10,200,5]]]
 ];
+const GEN_SCHEMA = [
+  ['Generation', [['starCount','Stars','range',10,300,1],['radius','Radius','range',400,2500,50],
+    ['minDist','Min spacing','range',40,300,5],['useGalaxy01','galaxy_01 min-dist','bool'],['starSize','Star size','range',4,30,1],['bakedRender','Baked render (fast)','bool']]],
+  ['Spectral mix', [['wM','Red (M)','range',0,5,1],['wK','Orange (K)','range',0,5,1],['wG','Yellow (G)','range',0,5,1],
+    ['wF','White (F)','range',0,5,1],['wB','Blue (B)','range',0,5,1],['wO','Purple (O)','range',0,5,1],['jitter','Color jitter','range',0,40,1]]]
+];
 const PAGES = [
-  { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true },
-  { id:'gen',      label:'Galaxy Gen', schema: [],         target: ()=>CFG.gen },
+  { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true, onChange: invalidateSunSprites },
+  { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: regenerate },
   { id:'backdrop', label:'Backdrop',   schema: [],         target: ()=>CFG.backdrop },
   { id:'lanes',    label:'Lanes',      schema: [],         target: ()=>CFG.lanes },
   { id:'traffic',  label:'Traffic',    schema: [],         target: ()=>CFG.traffic },
@@ -380,9 +458,15 @@ function showPage(){
     note.textContent='No options here yet — this page fills in a later phase.';
     body.appendChild(note); return;
   }
-  buildControls(page.schema, page.target(), body);
+  buildControls(page.schema, page.target(), body, page.onChange);
+  if(page.id==='gen'){
+    let rb=document.createElement('button'); rb.className='act-btn'; rb.textContent='Regenerate (new seed)';
+    rb.onclick=reroll; body.appendChild(rb);
+  }
   let hint=document.createElement('div'); hint.className='hint';
-  hint.textContent='Toggle any layer or drag any value — updates live.';
+  hint.textContent = (page.id==='gen')
+    ? 'Changes regenerate live. Hit ▶ VIEW GALAXY (top-left) to see it — drag to pan, wheel to zoom.'
+    : 'Toggle any layer or drag any value — updates live.';
   body.appendChild(hint);
 }
 function buildPresetRow(body){
@@ -395,7 +479,7 @@ function buildPresetRow(body){
   pr.appendChild(presetSel); body.appendChild(pr);
   let ph=document.createElement('div'); ph.className='hint'; ph.style.margin='2px 0 4px'; ph.textContent='pick a sun version, or press [ / ] to cycle'; body.appendChild(ph);
 }
-function buildControls(schema, target, body){
+function buildControls(schema, target, body, onChange){
   for(const [group, items] of schema){
     let h=document.createElement('div'); h.className='grp'; h.textContent=group; body.appendChild(h);
     for(const item of items){
@@ -404,17 +488,17 @@ function buildControls(schema, target, body){
       let lab=document.createElement('span'); lab.className='lab'; lab.textContent=label; row.appendChild(lab);
       if(type==='bool'){
         let inp=document.createElement('input'); inp.type='checkbox'; inp.checked=!!target[key];
-        inp.oninput=()=>{ target[key]=inp.checked; }; row.appendChild(inp);
+        inp.oninput=()=>{ target[key]=inp.checked; if(onChange) onChange(); }; row.appendChild(inp);
         controls[key]={type, input:inp};
       } else if(type==='range'){
         let inp=document.createElement('input'); inp.type='range'; inp.min=item[3]; inp.max=item[4]; inp.step=item[5]; inp.value=target[key];
         let val=document.createElement('span'); val.className='val'; val.textContent=target[key];
-        inp.oninput=()=>{ target[key]=parseFloat(inp.value); val.textContent=inp.value; };
+        inp.oninput=()=>{ target[key]=parseFloat(inp.value); val.textContent=inp.value; if(onChange) onChange(); };
         row.appendChild(inp); row.appendChild(val);
         controls[key]={type, input:inp, val};
       } else if(type==='color'){
         let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(target[key]);
-        inp.oninput=()=>{ target[key]=hexToRgb(inp.value); }; row.appendChild(inp);
+        inp.oninput=()=>{ target[key]=hexToRgb(inp.value); if(onChange) onChange(); }; row.appendChild(inp);
         controls[key]={type, input:inp};
       }
       body.appendChild(row);
@@ -437,6 +521,7 @@ function applyPreset(name){
   for(const k in ov) merged[k]=ov[k];
   for(const k in merged) OPTS[k]=merged[k];
   refreshPanel();
+  invalidateSunSprites();   // preset changed the sun -> rebuild baked sprites
   let tag=document.getElementById('preset-tag'); if(tag) tag.textContent='· '+(PRESET_LABELS[name]||name);
 }
 function keyPressed(){
