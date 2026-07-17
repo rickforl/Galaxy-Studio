@@ -62,7 +62,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '15';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '19';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -97,6 +97,8 @@ let CFG = {
     cover: 1.5, bakeRes: 1024,                                                  // extent = gen.radius * cover ; baked-buffer resolution
     // BASE FILL
     baseOn: true, baseColor: [6, 8, 16], baseOpacity: 1.0,
+    // IMAGE (curated photo gallery in galaxy_backgrounds/)
+    imgOn: false, imgIndex: 3, imgHashPick: false, imgRot: 0, imgFlip: false, imgScale: 1.0, imgOpacity: 1.0,
     // NEBULA (procedural soft clouds, seeded)
     nebOn: true, nebColorA: [40, 30, 90], nebColorB: [120, 40, 110], nebCount: 42, nebScale: 1.0, nebOpacity: 0.5, nebSeed: 7,
     // GRID OVERLAY
@@ -104,7 +106,7 @@ let CFG = {
     // RADIAL FADE (vignette — hides image/nebula edge cutoff)
     fadeOn: true, fadeColor: [4, 5, 9], fadeInner: 0.55, fadeOuter: 1.0, fadeOpacity: 1.0,
     // BAKE INCLUDES — which layers go into the baked backdrop buffer (unchecked = drawn live)
-    bake_base: true, bake_neb: true, bake_grid: false, bake_fade: true
+    bake_base: true, bake_img: true, bake_neb: true, bake_grid: false, bake_fade: true
   },
   lanes: {}, traffic: {}, economy: {}   // filled in later phases
 };
@@ -151,8 +153,18 @@ function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
 let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
 function draw(){
   if (viewMode === 'galaxy') drawGalaxyView();
+  else if (activePage === 'backdrop') drawBackdropPreview();   // isolated backdrop compilation (no sun/stars)
   else drawSunPreview();
   updateFps();
+}
+function drawBackdropPreview(){
+  background(2,3,6);
+  let E=bdExtent();
+  let playX = PANELW + (width-PANELW)/2, playY = height/2;
+  let fit = Math.min(width-PANELW, height) * 0.9 / (2*E);      // fit the 2E square into ~90% of the play area
+  push(); translate(playX, playY); scale(fit); drawBackdrop(); pop();
+  blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
+  text('backdrop preview · extent '+Math.round(E)+' · bake '+CFG.backdrop.bakeRes+'²', playX, height-16);
 }
 function drawSunPreview(){
   background(OPTS.bg ? color(6,7,12) : color(1,1,2));
@@ -235,24 +247,44 @@ function getSunSprite(color){
   return spr;
 }
 // ---------- Backdrop (composite layers rendered behind the galaxy) ----------
-let bdBuffer=null, bdReady=false;
+let bdBuf={}, bdDirty=true;                                                   // per-layer baked buffers + rebuild flag
 function bdExtent(){ return CFG.gen.radius * CFG.backdrop.cover; }             // world half-size the backdrop covers
-function invalidateBackdrop(){ bdReady=false; }                               // rebuild the baked buffer lazily on next frame
+function invalidateBackdrop(){ bdDirty=true; }                               // rebuild baked layer buffers lazily next frame
 function bdHash(i,s){ let x=Math.sin(i*127.1 + s*311.7)*43758.5453; return x-Math.floor(x); }   // seeded 0..1
-function bdLayerOn(layer, filter){
+const BD_LAYERS = ['base','img','neb','grid','fade'];                          // bottom -> top stacking order
+const BD_BLEND  = { base:'blend', img:'blend', neb:'add', grid:'blend', fade:'blend' };   // per-layer blit blend mode
+function drawOneBdLayer(P, E, L){
   let B=CFG.backdrop;
-  if(!B[layer+'On']) return false;
-  if(!filter) return true;                                                    // preview: all on-layers
-  let baked = B['bake_'+layer]!==false;
-  return filter==='bake' ? baked : !baked;
+  if(L==='base')      bd_base (P,E,B);
+  else if(L==='img')  bd_image(P,E,B);
+  else if(L==='neb')  bd_neb  (P,E,B);
+  else if(L==='grid') bd_grid (P,E,B);
+  else if(L==='fade') bd_fade (P,E,B);
 }
-const BD_LAYERS = ['base','neb','grid','fade'];
-function drawBackdropLayers(P, E, filter){
-  let B=CFG.backdrop;
-  if(bdLayerOn('base',filter)) bd_base(P,E,B);
-  if(bdLayerOn('neb', filter)) bd_neb (P,E,B);
-  if(bdLayerOn('grid',filter)) bd_grid(P,E,B);
-  if(bdLayerOn('fade',filter)) bd_fade(P,E,B);
+let bdImgCache = {};    // index -> p5.Image once loaded ('loading' in flight, false on error)
+function bdGetImg(idx){
+  idx = ((idx % BD_IMGS.length) + BD_IMGS.length) % BD_IMGS.length;
+  let c = bdImgCache[idx];
+  if(c==='loading' || c===false) return null;
+  if(c) return c;
+  bdImgCache[idx]='loading';
+  loadImage(BD_IMGS[idx], im=>{ bdImgCache[idx]=im; invalidateBackdrop(); }, ()=>{ bdImgCache[idx]=false; });
+  return null;                                              // not ready this frame; re-bakes when the load resolves
+}
+function bdImgPick(B){
+  if(!B.imgHashPick) return { idx:B.imgIndex, rot:B.imgRot, flip:B.imgFlip };
+  let h=(CFG.gen.seed|0);                                   // hash-driven: deterministic image/rot/flip from the galaxy seed
+  return { idx:Math.floor(bdHash(1,h)*BD_IMGS.length), rot:Math.floor(bdHash(2,h)*4), flip:bdHash(3,h)<0.5 };
+}
+function bd_image(P,E,B){
+  let pk=bdImgPick(B), img=bdGetImg(pk.idx);
+  if(!img) return;
+  P.push(); P.imageMode(CENTER);
+  P.rotate(pk.rot*HALF_PI); if(pk.flip) P.scale(-1,1);
+  let s=(2*E)/Math.min(img.width,img.height)*B.imgScale;    // cover the square; radial fade masks the overflow edges
+  let dc=P.drawingContext, pa=dc.globalAlpha; dc.globalAlpha=B.imgOpacity;   // opacity via globalAlpha — avoids p5 tint's per-pixel cost
+  P.image(img, 0,0, img.width*s, img.height*s);
+  dc.globalAlpha=pa; P.pop();
 }
 function bd_base(P,E,B){
   P.push(); P.noStroke(); P.rectMode(CENTER);
@@ -263,7 +295,7 @@ function bd_neb(P,E,B){
   P.push(); P.noStroke(); P.blendMode(ADD);
   let n=B.nebCount|0;
   for(let i=0;i<n;i++){
-    let a=bdHash(i,B.nebSeed)*TWO_PI, rr=E*0.9*Math.sqrt(bdHash(i+50,B.nebSeed));
+    let a=bdHash(i,B.nebSeed)*TWO_PI, rr=E*0.9*Math.pow(bdHash(i+50,B.nebSeed),2);   // center-biased: dense core, fades outward
     let x=Math.cos(a)*rr, y=Math.sin(a)*rr;
     let rad=E*(0.12+0.35*bdHash(i+100,B.nebSeed))*B.nebScale;
     let t=bdHash(i+150,B.nebSeed);
@@ -284,24 +316,33 @@ function bd_grid(P,E,B){
 }
 function bd_fade(P,E,B){
   P.push(); P.noStroke(); P.rectMode(CENTER);
-  let g=P.drawingContext.createRadialGradient(0,0,E*B.fadeInner,0,0,E*B.fadeOuter);
+  let ri=Math.min(B.fadeInner,B.fadeOuter), ro=Math.max(B.fadeInner,B.fadeOuter)+0.001;   // order-independent: clear inside, opaque outside (never inverts)
+  let g=P.drawingContext.createRadialGradient(0,0,E*ri,0,0,E*ro);
   g.addColorStop(0, rgba(B.fadeColor,0)); g.addColorStop(1, rgba(B.fadeColor,B.fadeOpacity));
   P.drawingContext.fillStyle=g; P.rect(0,0,2*E,2*E); P.pop();
 }
-function bakeBackdrop(){
-  let E=bdExtent(), res=CFG.backdrop.bakeRes|0;
-  if(!bdBuffer || bdBuffer.width!==res){ bdBuffer=createGraphics(res,res); bdBuffer.pixelDensity(1); }
-  bdBuffer.clear();
-  bdBuffer.push();
-  bdBuffer.translate(res/2,res/2); bdBuffer.scale(res/(2*E));                 // buffer space -> world [-E,E]^2
-  drawBackdropLayers(bdBuffer, E, 'bake');
-  bdBuffer.pop();
-  bdReady=true;
+function bakeBdLayer(L, E, res){                                              // render one layer into its own transparent buffer
+  let b=bdBuf[L];
+  if(!b || b.width!==res){ b=createGraphics(res,res); b.pixelDensity(1); bdBuf[L]=b; }
+  b.clear();
+  b.push(); b.translate(res/2,res/2); b.scale(res/(2*E));                     // buffer space -> world [-E,E]^2
+  drawOneBdLayer(b, E, L);
+  b.pop();
+  return b;
 }
-function drawBackdrop(){                                                      // called inside the camera transform, before stars
-  let E=bdExtent();
-  if(BD_LAYERS.some(L=>bdLayerOn(L,'bake'))){ if(!bdReady) bakeBackdrop(); imageMode(CENTER); image(bdBuffer,0,0,2*E,2*E); }
-  if(BD_LAYERS.some(L=>bdLayerOn(L,'live'))) drawBackdropLayers(window, E, 'live');
+function drawBackdrop(){                                                      // called inside a transform; composites layers in stack order
+  let E=bdExtent(), res=CFG.backdrop.bakeRes|0, B=CFG.backdrop;
+  for(const L of BD_LAYERS){
+    if(!B[L+'On']) continue;
+    if(B['bake_'+L]!==false){                                                 // baked: blit this layer's own buffer (rebuild if dirty/resized)
+      let b=bdBuf[L];
+      if(bdDirty || !b || b.width!==res) b=bakeBdLayer(L, E, res);
+      push(); if(BD_BLEND[L]==='add') blendMode(ADD); imageMode(CENTER); image(b, 0,0, 2*E, 2*E); pop();
+    } else {                                                                  // live: draw directly, at its position in the stack
+      drawOneBdLayer(window, E, L);
+    }
+  }
+  bdDirty=false;
 }
 function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); }       // radius change -> extent change -> re-bake
 function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); regenerate(); }
@@ -540,16 +581,23 @@ const GEN_SCHEMA = [
   ['Spectral mix', [['wM','Red (M)','range',0,5,1],['wK','Orange (K)','range',0,5,1],['wG','Yellow (G)','range',0,5,1],
     ['wF','White (F)','range',0,5,1],['wB','Blue (B)','range',0,5,1],['wO','Purple (O)','range',0,5,1],['jitter','Color jitter','range',0,40,1]]]
 ];
+const BD_IMGS = ['galaxy_backgrounds/bright_01.png','galaxy_backgrounds/cigar_01.png','galaxy_backgrounds/evileye_01.png',
+  'galaxy_backgrounds/gal_neb_10.jpg','galaxy_backgrounds/gal_neb_17.jpg','galaxy_backgrounds/gal_neb_18.jpg',
+  'galaxy_backgrounds/gal_neb_19.jpg','galaxy_backgrounds/gal_neb_20.jpg','galaxy_backgrounds/gal_neb_21.jpg',
+  'galaxy_backgrounds/gal_neb_23.jpg','galaxy_backgrounds/gal_neb_24.jpg','galaxy_backgrounds/milky_01.png','galaxy_backgrounds/pink01.jpg'];
+const BD_IMG_OPTS = BD_IMGS.map((p,i)=>[i, p.split('/').pop().replace(/\.(png|jpg)$/,'')]);
 const BACKDROP_SCHEMA = [
   ['Global', [['cover','Cover ×radius','range',0.5,3,0.05],['bakeRes','Bake res','range',256,2048,128]]],
   ['Base fill', [['baseOn','Base','bool'],['baseColor','Color','color'],['baseOpacity','Opacity','range',0,1,0.01]]],
+  ['Image', [['imgOn','Image','bool'],['imgIndex','Which','select',BD_IMG_OPTS],['imgHashPick','Hash pick','bool'],
+    ['imgRot','Rotate ×90°','range',0,3,1],['imgFlip','Mirror','bool'],['imgScale','Scale','range',0.3,3,0.05],['imgOpacity','Opacity','range',0,1,0.01]]],
   ['Nebula', [['nebOn','Nebula','bool'],['nebColorA','Color A','color'],['nebColorB','Color B','color'],
     ['nebCount','Cloud count','range',0,120,1],['nebScale','Cloud size','range',0.2,3,0.05],['nebOpacity','Opacity','range',0,1,0.01],['nebSeed','Seed','range',1,999,1]]],
   ['Grid overlay', [['gridOn','Grid','bool'],['gridColor','Color','color'],['gridOpacity','Opacity','range',0,1,0.01],
     ['gridSpacing','Spacing','range',50,600,10],['gridWeight','Line weight','range',0.5,4,0.5]]],
   ['Radial fade (hide edges)', [['fadeOn','Fade','bool'],['fadeColor','Edge color','color'],
     ['fadeInner','Inner','range',0,1,0.01],['fadeOuter','Outer','range',0.2,1.5,0.01],['fadeOpacity','Opacity','range',0,1,0.01]]],
-  ['Bake includes (off = drawn live)', [['bake_base','Base','bool'],['bake_neb','Nebula','bool'],['bake_grid','Grid','bool'],['bake_fade','Fade','bool']]]
+  ['Bake includes (off = drawn live)', [['bake_base','Base','bool'],['bake_img','Image','bool'],['bake_neb','Nebula','bool'],['bake_grid','Grid','bool'],['bake_fade','Fade','bool']]]
 ];
 const PAGES = [
   { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true, onChange: invalidateSunSprites },
@@ -624,6 +672,12 @@ function buildControls(schema, target, body, onChange){
         let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(target[key]);
         inp.oninput=()=>{ target[key]=hexToRgb(inp.value); if(onChange) onChange(); }; row.appendChild(inp);
         controls[key]={type, input:inp};
+      } else if(type==='select'){
+        let inp=document.createElement('select'); let opts=item[3]||[];
+        for(const [v,l] of opts){ let o=document.createElement('option'); o.value=v; o.textContent=l; inp.appendChild(o); }
+        inp.value=target[key];
+        inp.oninput=()=>{ target[key]=parseInt(inp.value); if(onChange) onChange(); }; row.appendChild(inp);
+        controls[key]={type, input:inp};
       }
       body.appendChild(row);
     }
@@ -634,6 +688,7 @@ function refreshPanel(){
     if(c.type==='bool') c.input.checked=!!OPTS[key];
     else if(c.type==='range'){ c.input.value=OPTS[key]; if(c.val) c.val.textContent=OPTS[key]; }
     else if(c.type==='color') c.input.value=rgbToHex(OPTS[key]);
+    else if(c.type==='select') c.input.value=OPTS[key];
   }
   if(presetSel) presetSel.value=ACTIVE_PRESET;
 }
