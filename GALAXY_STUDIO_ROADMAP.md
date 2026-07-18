@@ -27,7 +27,13 @@
 ## Phase 2+ — Import each subsystem (options page + cull-aware render layer)
 9. **Backdrop** — nebula on/off, gallery pick, hash, rotation/flip, bake resolution + baked backdrop.
 10. **Lanes** — connection strategy + ranges; **three lane tiers (official / unofficial / transport-trunk), each independently colored and styled**; path shapes; lane rendering (culled). *Traffic is a separate later layer — lanes stay ship-free here.*
-11. **Traffic** — civilian ship count/speed/size/twinkle, smugglers, **ship-count LOD-by-zoom** + traffic rendering (culled). Perf levers live here.
+11. **Traffic** — rides the lanes from the Lanes tab; an **isolated Traffic view** with one **sub-tab per lane class** (+ add extra layers). Each ship is bound to a lane — galaxy_01 has no free-wandering traffic; the "random" feel comes from per-ship randomization. Ported model:
+    - **Civilian (official lanes)** — dense two-way ships on the drawn beams; random per-route lane colors; per-frame twinkling ship size; ~3+ ships/route; fade over the end 15%.
+    - **Unofficial (unofficial lanes)** — traffic on our unofficial lane class, kept **distinct from smugglers**; its own style / density / colors.
+    - **Transport (trunk lanes)** — studio addition (hub arteries); no galaxy_01 equivalent.
+    - **Smugglers (their own connections)** — a *separate*, **non-lane-bound** layer: it generates its **own** long-range links (`SMUGGLER` band `MIN_DIST 320 / MAX_DIST 640`, `LINKS_PER_SYSTEM 1`, deduped), **1 beamless ship/link**, random-colored, **slower** (`0.0012–0.0032`), size `random(2–5)` re-rolled per frame, fade at the end 15%. Ported galaxy_01 → galaxy_translator (`SmugglerRoute`/`SmugglerShip`); IE's red criminal routes were subsumed by these. **This is the "random traffic," distinct from the unofficial lanes** — the one traffic layer not bound to the lane network.
+    - **+ extra layers** — more traffic layers, each either riding a lane class or (like smugglers) generating its own connections, with its own style/behavior.
+    - Per-layer knobs: style (the 9 from `traffic_exhibit`), density, direction model (per-ship random phase/dir/speed/size = galaxy_01 organic flow, vs alternating/uniform), end-fade, color mode (multicolor/single/lane-match). Global: master, speed scale, **ship-count LOD-by-zoom** + culling (perf levers live here).
 12. **Economy** — GALEX index rate, settlements dedup, ghost-ticker count/speed + exchange sidebar + chyron.
 
 ## Phase 3 — Make it real

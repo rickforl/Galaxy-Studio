@@ -64,7 +64,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '36';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '37';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -144,7 +144,16 @@ let CFG = {
     pathMode:'straight', pathRough:0.18, pathDetail:4,
     dashLen:7, dashGap:7, flowDash:false, flowOppose:true, breathe:false, breatheSpeed:1, breatheAmt:0.4, animSpeed:1
   },
-  traffic: {}, economy: {}   // filled in later phases
+  traffic: {
+    on:true, speed:1.0, viewBg:'lanes',
+    layers:[
+      { name:'Official',   on:true, kind:'off',      style:'civilian', count:5, speed:1.0, size:1.0, colorMode:'lanematch', color:[120,200,255], dir:'random', gap:4, fade:0.15, minDist:300, maxDist:650, links:1, seed:11 },
+      { name:'Unofficial', on:true, kind:'uno',      style:'particle', count:2, speed:0.8, size:0.9, colorMode:'single',    color:[255,120,120], dir:'random', gap:3, fade:0.15, minDist:300, maxDist:650, links:1, seed:22 },
+      { name:'Transport',  on:true, kind:'trans',    style:'orbs',     count:3, speed:0.7, size:1.2, colorMode:'lanematch', color:[255,180,80],  dir:'two',    gap:5, fade:0.12, minDist:300, maxDist:650, links:1, seed:33 },
+      { name:'Smugglers',  on:true, kind:'smuggler', style:'civilian', count:1, speed:0.6, size:0.9, colorMode:'multi',     color:[200,160,255], dir:'random', gap:0, fade:0.15, minDist:320, maxDist:680, links:1, seed:44 }
+    ]
+  },
+  economy: {}   // filled in later phases
 };
 let OPTS = CFG.sun;                                 // sun renderer reads OPTS (=== CFG.sun) — unchanged downstream
 const BASE = JSON.parse(JSON.stringify(CFG.sun));   // sun defaults — preset switching resets to these first
@@ -192,10 +201,12 @@ function windowResized(){ resizeCanvas(windowWidth, windowHeight); invalidateSta
 let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
 function draw(){
   stepNebula(CFG.backdrop);                                                    // nebula: hold, then crossfade to the next stepped frame
+  if(CFG.traffic.on){ for(const L of CFG.traffic.layers) if(L.on) L.time=(L.time||0)+(L.speed||1)*CFG.traffic.speed*0.01; }   // advance each traffic layer's clock
   if (viewMode === 'galaxy') drawGalaxyView();
   else if (activePage === 'backdrop') drawBackdropPreview();   // isolated backdrop compilation (no sun/stars)
   else if (activePage === 'stars') drawStarsPreview();         // isolated starfield compilation
   else if (activePage === 'lanes') drawLanesPreview();         // isolated lane network (nodes + beams, fit)
+  else if (activePage === 'traffic') drawTrafficPreview();     // isolated traffic (lanes + ships)
   else drawSunPreview();
   updateFps();
   if(millis()-lastSaveCheck>1500){ lastSaveCheck=millis(); autoSave(); }        // debounced auto-persist to localStorage
@@ -358,7 +369,7 @@ function lnBuild(){ laneList=[]; if(!galaxy.length){ lnNeedsBuild=false; return;
       for(let k=0;k<Math.min(C.unofficialLinks,cand.length);k++){ let j=cand[k].j, key=lnEk(i,j); if(seen.has(key))continue; seen.add(key); laneList.push(lnMk(i,j,'uno')); } } }
   if(C.transOn){ for(const [a,b] of lnTransport()) laneList.push(lnMk(a,b,'trans')); }   // independent overlay: coexists with official/unofficial on shared routes (they blend additively)
   let ord={trans:0, uno:1, off:2}; laneList.sort((p,q)=>ord[p.kind]-ord[q.kind]);   // draw order: trunk glow behind, detailed lanes on top
-  lnRegenPaths(); lnNeedsBuild=false;
+  lnRegenPaths(); lnNeedsBuild=false; invalidateTraffic();                          // lane set changed -> traffic ship caches (keyed by lane index) are stale
 }
 function lnGenPath(seed){ let C=CFG.lanes; if(C.pathMode==='straight') return null;
   let pts=[{t:0,d:0},{t:1,d:0}], h=seed>>>0, rnd=()=>{ h=(h*1664525+1013904223)>>>0; return h/4294967296*2-1; };
@@ -423,11 +434,123 @@ function drawLanes(camX,camY,camZoom){
     lnDrawOne(L, ax,ay,bx,by, z); }
   pop(); blendMode(BLEND); drawingContext.setLineDash([]);
 }
+// ---------- Traffic: ships riding the lanes (lane-bound) + self-routing smuggler drifters ----------
+// Lane-bound layers (off/uno/trans) drop ships onto the existing lanes (from laneList); the smuggler
+// layer generates its own long-range connections. Ships draw only (no beam — the lane is already there).
+const TRAF_PAL=[[120,200,255],[255,180,90],[130,240,170],[255,120,160],[180,150,255],[255,235,140],[120,255,235]];
+function invalidateTraffic(){ for(const L of CFG.traffic.layers){ L._ships=null; L._pairs=null; } }
+function trMakeShips(count, seed, dirModel){ let arr=[], rs=(seed>>>0)||1, rnd=()=>{ rs=(rs*1664525+1013904223)>>>0; return rs/4294967296; };
+  for(let i=0;i<(count|0);i++){ let lane,dir;
+    if(dirModel==='two'){ lane=i%2; dir=lane===0?1:-1; }
+    else if(dirModel==='single'){ lane=0; dir=1; }
+    else { lane=rnd()>0.5?0:1; dir=lane===0?1:-1; }                       // 'random' = galaxy_01 model (each ship picks a lane/dir)
+    arr.push({ base:rnd(), spd:0.7+rnd()*0.7, sz:0.6+rnd()*0.9, ci:Math.floor(rnd()*TRAF_PAL.length), crim:rnd()<0.22, lane, dir }); }
+  return arr; }
+function trGetShips(L, key){ if(!L._ships) L._ships={}; if(!L._ships[key]) L._ships[key]=trMakeShips(L.count, ((key+1)*2654435761 ^ ((L.seed||1)*40503))>>>0, L.dir); return L._ships[key]; }
+function trafColor(s,L,laneCol){ if(L.style==='economy') return s.crim?[255,72,72]:[92,162,255]; if(L.colorMode==='single') return L.color; if(L.colorMode==='lanematch') return laneCol||L.color; return TRAF_PAL[s.ci]; }
+function trDot(x,y,r,c,a){ let dc=drawingContext; dc.fillStyle=rgba(c,a); dc.beginPath(); dc.arc(x,y,r,0,TWO_PI); dc.fill(); }
+function trGlow(x,y,r,c,a){ let dc=drawingContext, g=dc.createRadialGradient(x,y,0,x,y,r); g.addColorStop(0,rgba(c,a)); g.addColorStop(1,rgba(c,0)); dc.fillStyle=g; dc.beginPath(); dc.arc(x,y,r,0,TWO_PI); dc.fill(); }
+function trTri(x,y,ang,r,c){ let dc=drawingContext; dc.save(); dc.translate(x,y); dc.rotate(ang); dc.fillStyle=rgba(c,0.95); dc.beginPath(); dc.moveTo(r,0); dc.lineTo(-r*0.72,r*0.62); dc.lineTo(-r*0.72,-r*0.62); dc.closePath(); dc.fill(); dc.restore(); }
+function trShipXY(a,b,s,t,gap){ let p=((s.base+t*s.spd)%1+1)%1, frac=s.dir>0?p:1-p, dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1, nx=-dy/len, ny=dx/len, g=(s.lane===0?gap:-gap);
+  return { x:a.x+dx*frac+nx*g, y:a.y+dy*frac+ny*g, ang:Math.atan2(dy*s.dir,dx*s.dir), frac, dir:s.dir, u:{x:dx/len,y:dy/len} }; }
+function trafRenderShips(a,b, ships, L, t, laneCol){
+  let sz=L.size, st=L.style, gap=(L.gap||0), fade=L.fade||0, dc=drawingContext;
+  for(const s of ships){ let p=trShipXY(a,b,s,t,gap), c=trafColor(s,L,laneCol);
+    let al=1; if(fade>0){ if(p.frac<fade) al=p.frac/fade; else if(p.frac>1-fade) al=(1-p.frac)/fade; }        // fade at the ends
+    if(st==='triangle'){ trTri(p.x,p.y,p.ang,4.4*sz,c); }
+    else if(st==='comet'){ let tl=14*sz, tx=p.x-p.u.x*p.dir*tl, ty=p.y-p.u.y*p.dir*tl, g=dc.createLinearGradient(tx,ty,p.x,p.y); g.addColorStop(0,rgba(c,0)); g.addColorStop(1,rgba(c,0.6*al)); dc.strokeStyle=g; dc.lineWidth=1.8*sz; dc.lineCap='round'; dc.beginPath(); dc.moveTo(tx,ty); dc.lineTo(p.x,p.y); dc.stroke(); trDot(p.x,p.y,1.7*sz,[255,255,255],0.9*al); trGlow(p.x,p.y,5*sz,c,0.5*al); }
+    else if(st==='pulses'){ let pulse=0.5+0.5*Math.sin(p.frac*Math.PI*4); trGlow(p.x,p.y,(5+5*pulse)*sz,c,0.6*al); trDot(p.x,p.y,1.6*sz,[255,255,255],0.85*al); }
+    else if(st==='orbs'){ trGlow(p.x,p.y,8*sz*(0.7+0.5*s.sz),c,0.5*al); trDot(p.x,p.y,1.9*sz,c,0.85*al); }
+    else if(st==='particle'){ trDot(p.x,p.y,1.2*sz,c,0.8*al); }
+    else { trGlow(p.x,p.y,4.5*sz,c,0.4*al); trDot(p.x,p.y,2*sz,c,0.95*al); }                                  // civilian / economy dots
+  }
+}
+function trSmugglerPairs(L){ if(L._pairs) return L._pairs; let pairs=[], seen=new Set(), lo=L.minDist||300, hi=L.maxDist||650, lo2=lo*lo, hi2=hi*hi;
+  for(let i=0;i<galaxy.length;i++){ let cand=[]; for(let j=0;j<galaxy.length;j++){ if(i===j)continue; let dx=galaxy[i].x-galaxy[j].x, dy=galaxy[i].y-galaxy[j].y, d2=dx*dx+dy*dy; if(d2>=lo2&&d2<hi2) cand.push({j,d2}); } cand.sort((a,b)=>a.d2-b.d2);
+    for(let k=0;k<Math.min(L.links||1,cand.length);k++){ let j=cand[k].j, key=i<j?i+'_'+j:j+'_'+i; if(seen.has(key))continue; seen.add(key); pairs.push([i,j]); } }
+  L._pairs=pairs; return pairs; }
+function drawTraffic(camX,camY,camZoom){
+  let TC=CFG.traffic; if(!TC.on || !galaxy.length) return;
+  if(lnNeedsBuild) lnBuild();
+  let cx=(camX!==undefined)?camX:cam.x, cy=(camY!==undefined)?camY:cam.y, z=(camZoom!==undefined)?camZoom:cam.zoom;
+  let px=(PANELW+width)/2, py=height/2, M=80, off=(a,b)=>((a<PANELW-M&&b<PANELW-M)||(a>width+M&&b>width+M));
+  push(); blendMode(ADD);
+  for(const L of TC.layers){ if(!L.on) continue;
+    if(L.kind==='smuggler'){ let pairs=trSmugglerPairs(L);
+      for(let pi=0;pi<pairs.length;pi++){ let A=galaxy[pairs[pi][0]], B=galaxy[pairs[pi][1]];
+        let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
+        if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
+        trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,pi), L, L.time||0, L.color); }
+      continue; }
+    for(let li=0;li<laneList.length;li++){ let lane=laneList[li]; if(lane.kind!==L.kind) continue;
+      let A=galaxy[lane.a], B=galaxy[lane.b];
+      let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
+      if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
+      trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,li), L, L.time||0, lnColor(lane,0)); }
+  }
+  pop(); blendMode(BLEND);
+}
+const TRAF_STYLE_OPTS=[['civilian','Civilian dots'],['economy','Commercial/criminal'],['comet','Comet trails'],['pulses','Light pulses'],['triangle','Triangle ships'],['particle','Particle stream'],['orbs','Glow orbs']];
+const TRAF_DIR_OPTS=[['random','Random (galaxy_01)'],['two','Two-way'],['single','Single']];
+const TRAF_CM_OPTS=[['multi','Multicolor'],['single','Single'],['lanematch','Lane-match']];
+const TRAF_KIND_OPTS=[['off','Official lanes'],['uno','Unofficial lanes'],['trans','Transport lanes'],['smuggler','Smugglers (self-route)']];
+function trafRow(parent,label){ let r=document.createElement('label'); r.className='row'; let l=document.createElement('span'); l.className='lab'; l.textContent=label; r.appendChild(l); parent.appendChild(r); return r; }
+function trafBool(parent,label,val,onc){ let r=trafRow(parent,label); let i=document.createElement('input'); i.type='checkbox'; i.checked=val; i.oninput=()=>onc(i.checked); r.appendChild(i); return i; }
+function trafRange(parent,label,mn,mx,st,val,onc){ let r=trafRow(parent,label); let i=document.createElement('input'); i.type='range'; i.min=mn;i.max=mx;i.step=st;i.value=val; let v=document.createElement('span'); v.className='val'; v.textContent=val; i.oninput=()=>{ v.textContent=i.value; onc(parseFloat(i.value)); }; r.appendChild(i); r.appendChild(v); return i; }
+function trafSelect(parent,label,opts,val,onc){ let r=trafRow(parent,label); let s=document.createElement('select'); for(const [v,l] of opts){ let o=document.createElement('option'); o.value=v; o.textContent=l; s.appendChild(o); } s.value=val; s.onchange=()=>onc(s.value); r.appendChild(s); return s; }
+function trafColorInp(parent,label,val,onc){ let r=trafRow(parent,label); let i=document.createElement('input'); i.type='color'; i.value=rgbToHex(val); i.oninput=()=>onc(hexToRgb(i.value)); r.appendChild(i); return i; }
+function trafNewLayer(){ return { name:'Extra', on:true, kind:'off', style:'civilian', count:4, speed:1, size:1, colorMode:'multi', color:[150,200,255], dir:'random', gap:4, fade:0.15, minDist:300, maxDist:680, links:1, seed:(Math.floor(Math.random()*1e6)||1) }; }
+function trafLayerBlock(body,L,idx){
+  let box=document.createElement('div'); box.style.cssText='border:1px solid #2a3550;border-radius:5px;padding:4px 6px;margin:5px 0;';
+  let hd=document.createElement('div'); hd.style.cssText='display:flex;align-items:center;gap:6px;margin-bottom:2px;';
+  let on=document.createElement('input'); on.type='checkbox'; on.checked=L.on; on.title='render this layer'; on.onchange=()=>{L.on=on.checked;};
+  let kl=(TRAF_KIND_OPTS.find(k=>k[0]===L.kind)||['',L.kind])[1].replace(' lanes','').replace(' (self-route)','');
+  let nm=document.createElement('span'); nm.textContent=L.name+(kl&&kl!==L.name?' · '+kl:''); nm.style.cssText='flex:1;color:#cdd6e4;font-weight:bold;';
+  hd.appendChild(on); hd.appendChild(nm);
+  let custom = idx>=4;                                       // first 4 are the fixed defaults; extras are removable + retargetable
+  if(custom){ let rm=document.createElement('button'); rm.textContent='×'; rm.style.cssText='background:#3a2222;color:#e8b0b0;border:1px solid #6a3a3a;cursor:pointer;padding:0 7px;'; rm.onclick=()=>{ CFG.traffic.layers.splice(idx,1); showPage(); }; hd.appendChild(rm); }
+  box.appendChild(hd);
+  if(custom) trafSelect(box,'Rides', TRAF_KIND_OPTS, L.kind, v=>{L.kind=v; invalidateTraffic(); showPage();});
+  trafSelect(box,'Style', TRAF_STYLE_OPTS, L.style, v=>{L.style=v;});
+  trafSelect(box,'Direction', TRAF_DIR_OPTS, L.dir, v=>{L.dir=v; invalidateTraffic();});
+  trafSelect(box,'Color', TRAF_CM_OPTS, L.colorMode, v=>{L.colorMode=v;});
+  trafColorInp(box,'Color', L.color, c=>{L.color=c;});
+  trafRange(box,'Ships/lane', 0,20,1, L.count, v=>{L.count=v|0; invalidateTraffic();});
+  trafRange(box,'Speed', 0,3,0.05, L.speed, v=>{L.speed=v;});
+  trafRange(box,'Size', 0.3,3,0.05, L.size, v=>{L.size=v;});
+  trafRange(box,'Lane gap', 0,12,0.5, L.gap, v=>{L.gap=v;});
+  trafRange(box,'End fade', 0,0.49,0.01, L.fade, v=>{L.fade=v;});
+  if(L.kind==='smuggler'){ trafRange(box,'Min dist', 50,1400,10, L.minDist, v=>{L.minDist=v; invalidateTraffic();}); trafRange(box,'Max dist', 100,2400,10, L.maxDist, v=>{L.maxDist=v; invalidateTraffic();}); trafRange(box,'Links/sys', 0,4,1, L.links, v=>{L.links=v|0; invalidateTraffic();}); }
+  body.appendChild(box);
+}
+function buildTrafficPanel(body){
+  let g=document.createElement('div'); g.className='grp'; g.textContent='Global'; body.appendChild(g);
+  trafBool(body,'Traffic on', CFG.traffic.on, v=>{CFG.traffic.on=v;});
+  trafRange(body,'Speed ×', 0,3,0.05, CFG.traffic.speed, v=>{CFG.traffic.speed=v;});
+  let h=document.createElement('div'); h.className='grp'; h.textContent='Layers (☑ = render)'; body.appendChild(h);
+  CFG.traffic.layers.forEach((L,idx)=> trafLayerBlock(body,L,idx));
+  let add=document.createElement('button'); add.className='act-btn'; add.textContent='+ add traffic layer'; add.onclick=()=>{ CFG.traffic.layers.push(trafNewLayer()); showPage(); }; body.appendChild(add);
+  let hint=document.createElement('div'); hint.className='hint'; hint.textContent='Each layer rides a lane class (Official/Unofficial/Transport) or self-routes (Smugglers). ☑ renders it in the view. Ships draw on top of the real lanes. (Edit-grid picker, lane-matched sample, and view-backgrounds land next.)'; body.appendChild(hint);
+}
+function drawTrafficPreview(){
+  background(3,4,9);
+  let TC=CFG.traffic, px=(PANELW+width)/2, py=height/2, playW=width-PANELW;
+  if(!galaxy.length){ blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER,CENTER); text('no systems — generate a galaxy first', px, py); return; }
+  let ext=1; for(const s of galaxy){ let ax=Math.abs(s.x), ay=Math.abs(s.y); if(ax>ext)ext=ax; if(ay>ext)ext=ay; }
+  let fit=Math.min(playW,height)*0.9/(2*ext);
+  drawLanes(0,0,fit);                                        // lanes beneath (respects the Lanes tab)
+  drawTraffic(0,0,fit);                                      // ships on top
+  noStroke(); for(const s of galaxy){ let x=px+s.x*fit, y=py+s.y*fit, r=1.6+(s.tier-1)*1.4; fill(s.color[0],s.color[1],s.color[2],235); circle(x,y,r*2); }
+  blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
+  let nL=TC.layers.filter(l=>l.on).length;
+  text('traffic preview · '+nL+' of '+TC.layers.length+' layers · lanes + ships · full context in VIEW GALAXY', px, height-16);
+}
 function drawGalaxyView(){
   background(4,5,9);
   drawBackdrop(true);                                       // parallax backdrop (deepest: far nebula/image)
   drawStars();                                              // starfield, per-layer parallax, in front of the backdrop
   drawLanes();                                              // connection beams (screen-space, projected; under the systems)
+  drawTraffic();                                            // ships riding the lanes + smuggler drifters (over lanes, under systems)
   let playX=(PANELW+width)/2, playY=height/2, playW=width-PANELW;
   let hw=playW/(2*cam.zoom), hh=height/(2*cam.zoom);
   let vMinX=-cam.x-hw, vMaxX=-cam.x+hw, vMinY=-cam.y-hh, vMaxY=-cam.y+hh;   // visible world rect (cull)
@@ -669,7 +792,7 @@ function drawBackdrop(parallax){                                              //
   if(parallax && B.fadeOn) bd_fadeViewport();                                 // hides the backdrop edge cutoff, matched to the viewport aspect
   bdDirty=false;
 }
-function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); invalidateLanes(); }   // radius change -> extent change -> re-bake + relink
+function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); invalidateLanes(); invalidateTraffic(); }   // radius change -> extent change -> re-bake + relink
 function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); regenerate(); }
 function mouseDragged(){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; } }
 function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); return false; } }
@@ -688,12 +811,13 @@ function afterConfigChange(){                               // re-bake everythin
   let tag=document.getElementById('preset-tag'); if(tag) tag.textContent='· '+(PRESET_LABELS[ACTIVE_PRESET]||ACTIVE_PRESET);
   showPage();
 }
-function autoSave(force){ let s=JSON.stringify(studioSnapshot()); if(!force && s===lastSaved) return; try{ localStorage.setItem(CFG_KEY,s); lastSaved=s; }catch(e){} }
+function snapClean(k,v){ return (k && k.charAt(0)==='_') ? undefined : v; }   // drop runtime caches (traffic _ships/_pairs) from saved JSON
+function autoSave(force){ let s=JSON.stringify(studioSnapshot(), snapClean); if(!force && s===lastSaved) return; try{ localStorage.setItem(CFG_KEY,s); lastSaved=s; }catch(e){} }
 function loadState(){ try{ let s=localStorage.getItem(CFG_KEY); if(!s) return false; applySnapshot(JSON.parse(s)); lastSaved=s; return true; }catch(e){ return false; } }
 function exportCFG(){
   let el=document.getElementById('export-name'); let name=((el&&el.value)||'galaxy_cfg.json').trim()||'galaxy_cfg.json';   // filename from the toolbar field (prompt() is blocked in some panes)
   if(!/\.json$/i.test(name)) name+='.json';
-  let url=URL.createObjectURL(new Blob([JSON.stringify(studioSnapshot(),null,2)],{type:'application/json'}));
+  let url=URL.createObjectURL(new Blob([JSON.stringify(studioSnapshot(), snapClean, 2)],{type:'application/json'}));
   let a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();   // in-DOM anchor: some browsers ignore a detached click
   setTimeout(()=>URL.revokeObjectURL(url), 1500);
 }
@@ -992,7 +1116,7 @@ const PAGES = [
   { id:'backdrop', label:'Backdrop',   schema: BACKDROP_SCHEMA, target: ()=>CFG.backdrop, onChange: invalidateBackdrop },
   { id:'stars',    label:'Stars',      schema: [], target: ()=>CFG.stars, custom:'stars' },
   { id:'lanes',    label:'Lanes',      schema: LANES_SCHEMA, target: ()=>CFG.lanes, lanePresets:true, onChange: onLaneChange },
-  { id:'traffic',  label:'Traffic',    schema: [],         target: ()=>CFG.traffic },
+  { id:'traffic',  label:'Traffic',    schema: [], target: ()=>CFG.traffic, custom:'traffic' },
   { id:'economy',  label:'Economy',    schema: [],         target: ()=>CFG.economy }
 ];
 let activePage = 'sun';
@@ -1015,6 +1139,7 @@ function showPage(){
   if(page.presets) buildPresetRow(body);
   if(page.lanePresets) buildLanePresetRow(body);
   if(page.custom==='stars'){ buildStarsPanel(body); return; }
+  if(page.custom==='traffic'){ buildTrafficPanel(body); return; }
   if(!page.schema.length){
     let note=document.createElement('div'); note.className='hint';
     note.textContent='No options here yet — this page fills in a later phase.';
