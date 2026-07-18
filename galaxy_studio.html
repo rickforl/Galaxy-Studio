@@ -64,7 +64,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '41';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '42';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -108,7 +108,8 @@ let CFG = {
     // GRID OVERLAY
     gridOn: false, gridColor: [60, 90, 140], gridOpacity: 0.25, gridSpacing: 200, gridWeight: 1,
     // RADIAL FADE (vignette — hides image/nebula edge cutoff)
-    fadeOn: true, fadeTrack: 'viewport', fadeColor: [4, 5, 9], fadeInner: 0.55, fadeOuter: 1.0, fadeOpacity: 1.0, fadeCurve: 1.0, fadeShape: 1.0,  // fadeTrack: viewport (screen vignette) | map (anchored to galaxy origin+radius, so it zooms+pans with the map — stand-in for the coordinate system); curve = softness; shape = circle..ellipse
+    fadeOn: true, fadeTrack: 'viewport', fadeColor: [4, 5, 9], fadeInner: 0.55, fadeOuter: 1.0, fadeOpacity: 1.0, fadeCurve: 1.0, fadeShape: 1.0,
+    fade2On: false, fade2Track: 'viewport', fade2Color: [4, 5, 9], fade2Inner: 0.8, fade2Outer: 1.35, fade2Opacity: 1.0, fade2Curve: 1.0, fade2Shape: 1.0,   // radial fade 2 (stacks on top of fade 1)  // fadeTrack: viewport (screen vignette) | map (anchored to galaxy origin+radius, so it zooms+pans with the map — stand-in for the coordinate system); curve = softness; shape = circle..ellipse
     // PARALLAX (galaxy view) — 1 = locked to the galaxy; lower = farther depth (pans/zooms less), matching the star layers
     baseParallax: 1, imgParallax: 1, nebParallax: 1, gridParallax: 1, fadeParallax: 1,
     // BAKE INCLUDES — which layers go into the baked backdrop buffer (unchecked = drawn live)
@@ -687,7 +688,7 @@ function drawOneBdLayer(P, E, L){
   else if(L==='img')  bd_image(P,E,B);
   else if(L==='neb')  bd_neb  (P,E,B);
   else if(L==='grid') bd_grid (P,E,B);
-  else if(L==='fade') bd_fade (P,E,B);
+  else if(L==='fade') bd_fade (P,E,fadeParams(B,1));
 }
 let bdImgCache = {};    // index -> p5.Image once loaded ('loading' in flight, false on error)
 function bdGetImg(idx){
@@ -801,29 +802,30 @@ function bd_grid(P,E,B){
   for(let y=0;y<=E;y+=sp){ P.line(-E,y,E,y); if(y>0) P.line(-E,-y,E,-y); }
   P.pop();
 }
-function fadeStops(g,B){ let n=12, cv=(B.fadeCurve||1), op=B.fadeOpacity; for(let i=0;i<=n;i++){ let t=i/n; g.addColorStop(t, rgba(B.fadeColor, Math.pow(t,cv)*op)); } }   // curved alpha ramp inner->outer (softness)
-function bd_fade(P,E,B){
+function fadeParams(B,n){ let p=(n===2?'fade2':'fade'); return { on:B[p+'On'], track:B[p+'Track'], color:B[p+'Color'], inner:B[p+'Inner'], outer:B[p+'Outer'], opacity:B[p+'Opacity'], curve:B[p+'Curve'], shape:B[p+'Shape'] }; }
+function fadeStops(g,F){ let n=12, cv=(F.curve||1), op=F.opacity; for(let i=0;i<=n;i++){ let t=i/n; g.addColorStop(t, rgba(F.color, Math.pow(t,cv)*op)); } }   // curved alpha ramp inner->outer (softness)
+function bd_fade(P,E,F){
   P.push(); P.noStroke(); P.rectMode(CENTER);
-  let ri=Math.min(B.fadeInner,B.fadeOuter), ro=Math.max(B.fadeInner,B.fadeOuter)+0.001;   // order-independent: clear inside, opaque outside (never inverts)
-  let g=P.drawingContext.createRadialGradient(0,0,E*ri,0,0,E*ro); fadeStops(g,B);
+  let ri=Math.min(F.inner,F.outer), ro=Math.max(F.inner,F.outer)+0.001;        // order-independent: clear inside, opaque outside (never inverts)
+  let g=P.drawingContext.createRadialGradient(0,0,E*ri,0,0,E*ro); fadeStops(g,F);
   P.drawingContext.fillStyle=g; P.rect(0,0,2*E,2*E); P.pop();
 }
-function bd_fadeViewport(){                                                   // galaxy view: aspect-aware elliptical vignette over the whole viewport (masks edges on any aspect/zoom)
-  let B=CFG.backdrop, pw=width-PANELW, ph=height, dc=drawingContext;
-  let ri=Math.min(B.fadeInner,B.fadeOuter), ro=Math.max(B.fadeInner,B.fadeOuter)+0.001;
+function bd_fadeViewport(F){                                                  // galaxy view: aspect-aware viewport vignette, or galaxy-anchored circle (map track)
+  let pw=width-PANELW, ph=height, dc=drawingContext;
+  let ri=Math.min(F.inner,F.outer), ro=Math.max(F.inner,F.outer)+0.001;
   let cx, cy, sx, sy;
-  if(B.fadeTrack==='map'){                                                     // anchored to the galaxy (world origin + radius): Inner/Outer are ×gen.radius; zooms AND pans with the map
+  if(F.track==='map'){                                                     // anchored to the galaxy (world origin + radius): Inner/Outer are ×gen.radius; zooms AND pans with the map
     let z=cam.zoom, px=(PANELW+width)/2, py=height/2, R=Math.max((CFG.gen.radius||1000)*z, 1);
     cx=px+cam.x*z; cy=py+cam.y*z; sx=R; sy=R;                                  // 1 unit = galaxy radius on screen
   } else {                                                                     // viewport vignette (screen-space, aspect-aware)
-    let sh=(B.fadeShape===undefined?1:B.fadeShape), avg=(pw+ph)*0.25;
+    let sh=(F.shape===undefined?1:F.shape), avg=(pw+ph)*0.25;
     cx=PANELW+pw*0.5; cy=ph*0.5; sx=lerp(avg,pw*0.5,sh); sy=lerp(avg,ph*0.5,sh);   // shape: 0 = round circle .. 1 = viewport-aspect ellipse
   }
   let s=Math.max(Math.min(sx,sy),1e-3);
   let reach=(Math.hypot(pw,ph)*0.5 + Math.abs(cx-(PANELW+pw*0.5)) + Math.abs(cy-ph*0.5))/s + ro + 0.5;   // rect must reach the farthest play-area corner in any mode/pan
   push(); noStroke(); rectMode(CENTER);
   translate(cx, cy); scale(sx, sy);
-  let g=dc.createRadialGradient(0,0,ri,0,0,ro); fadeStops(g,B);
+  let g=dc.createRadialGradient(0,0,ri,0,0,ro); fadeStops(g,F);
   dc.fillStyle=g; rect(0,0, reach*2, reach*2); pop();                          // beyond `ro` the gradient is solid, so the rest of the play area fills with the edge color
 }
 function bakeBdLayer(L, E, res){                                              // render one layer into its own transparent buffer
@@ -854,7 +856,8 @@ function drawBackdrop(parallax){                                              //
     }
     if(parallax){ pop(); }
   }
-  if(parallax && B.fadeOn) bd_fadeViewport();                                 // hides the backdrop edge cutoff, matched to the viewport aspect
+  if(parallax){ if(B.fadeOn) bd_fadeViewport(fadeParams(B,1)); if(B.fade2On) bd_fadeViewport(fadeParams(B,2)); }   // both fades stack (galaxy view)
+  else if(B.fade2On) bd_fade(window, E, fadeParams(B,2));   // preview: fade 1 drew in the loop; add fade 2 on top                                 // hides the backdrop edge cutoff, matched to the viewport aspect
   bdDirty=false;
 }
 function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); invalidateLanes(); invalidateTraffic(); }   // radius change -> extent change -> re-bake + relink
@@ -1132,9 +1135,12 @@ const BACKDROP_SCHEMA = [
   ['Nebula motion', [['nebAnimOn','Step over time','bool'],['nebInterval','Interval (s)','range',1,30,0.5],['nebStep','Step size','range',0.005,0.3,0.005],['nebBlend','Blend (s)','range',0,5,0.1]]],
   ['Grid overlay', [['gridOn','Grid','bool'],['gridColor','Color','color'],['gridOpacity','Opacity','range',0,1,0.01],
     ['gridSpacing','Spacing','range',50,600,10],['gridWeight','Line weight','range',0.5,4,0.5]]],
-  ['Radial fade (hide edges)', [['fadeOn','Fade','bool'],['fadeTrack','Track','select',[['viewport','Viewport'],['map','Map (galaxy)']]],['fadeColor','Edge color','color'],
+  ['Radial fade 1', [['fadeOn','Fade','bool'],['fadeTrack','Track','select',[['viewport','Viewport'],['map','Map (galaxy)']]],['fadeColor','Edge color','color'],
     ['fadeInner','Inner','range',0,2,0.01],['fadeOuter','Outer','range',0.2,3,0.01],['fadeOpacity','Opacity','range',0,1,0.01],
     ['fadeCurve','Softness','range',0.2,4,0.05],['fadeShape','Shape','range',0,1,0.01]]],
+  ['Radial fade 2', [['fade2On','Fade','bool'],['fade2Track','Track','select',[['viewport','Viewport'],['map','Map (galaxy)']]],['fade2Color','Edge color','color'],
+    ['fade2Inner','Inner','range',0,2,0.01],['fade2Outer','Outer','range',0.2,3,0.01],['fade2Opacity','Opacity','range',0,1,0.01],
+    ['fade2Curve','Softness','range',0.2,4,0.05],['fade2Shape','Shape','range',0,1,0.01]]],
   ['Parallax (galaxy view)', [['imgParallax','Image','range',0,1,0.01],['nebParallax','Nebula','range',0,1,0.01],['baseParallax','Base','range',0,1,0.01],['gridParallax','Grid','range',0,1,0.01]]],
   ['Bake includes (off = drawn live)', [['bake_base','Base','bool'],['bake_img','Image','bool'],['bake_neb','Nebula','bool'],['bake_grid','Grid','bool'],['bake_fade','Fade','bool']]]
 ];
