@@ -62,7 +62,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '23';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '24';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -743,7 +743,9 @@ function buildControls(schema, target, body, onChange){
         let inp=document.createElement('select'); let opts=item[3]||[];
         for(const [v,l] of opts){ let o=document.createElement('option'); o.value=v; o.textContent=l; inp.appendChild(o); }
         inp.value=target[key];
-        inp.oninput=()=>{ let v=inp.value; target[key]=(/^-?\d+$/.test(v)?parseInt(v):v); if(onChange) onChange(); }; row.appendChild(inp);
+        inp.oninput=()=>{ let v=inp.value; target[key]=(/^-?\d+$/.test(v)?parseInt(v):v);
+          if(key==='imgIndex' && !target.imgOn){ target.imgOn=true; if(controls.imgOn) controls.imgOn.input.checked=true; }   // picking a photo turns the Image layer on
+          if(onChange) onChange(); }; row.appendChild(inp);
         controls[key]={type, input:inp};
       }
       body.appendChild(row);
