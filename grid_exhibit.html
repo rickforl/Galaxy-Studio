@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Grid Exhibit</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#05070c;font-family:'Consolas','Monaco',monospace;}
+  #topbar{position:fixed;top:0;left:0;right:0;height:31px;display:flex;align-items:center;gap:8px;padding:0 10px;
+    background:rgba(6,12,20,0.96);border-bottom:1px solid #244a58;z-index:20;box-sizing:border-box;}
+  #topbar .ttl{color:#8fd0e0;font-weight:bold;letter-spacing:1px;font-size:12px;}
+  .pill{background:#123240;color:#8fe0f0;border:1px solid #2a7a8c;border-radius:9px;padding:1px 9px;font:10px 'Consolas',monospace;font-weight:bold;letter-spacing:.5px;}
+  #topbar button{background:#123240;color:#cdeef6;border:1px solid #2a7a8c;font:11px 'Consolas',monospace;padding:3px 10px;cursor:pointer;}
+  #topbar button:hover{background:#1a4453;}
+  #stat{margin-left:auto;color:#8fe0c8;font:11px 'Consolas',monospace;}
+  #panel{position:fixed;top:31px;left:0;width:256px;max-height:calc(100vh - 31px);overflow-y:auto;
+    background:rgba(8,14,22,0.92);border-right:1px solid #244a58;padding:8px 10px 40px;
+    color:#b9dce4;font:11px 'Consolas',monospace;z-index:10;box-sizing:border-box;}
+  #panel .grp{color:#8fd0e0;font-weight:bold;letter-spacing:.5px;margin:10px 0 4px;border-bottom:1px solid #223a44;padding-bottom:2px;}
+  #panel .row{display:flex;align-items:center;gap:6px;margin:3px 0;}
+  #panel .lab{width:80px;flex:none;color:#9bc4cc;}
+  #panel .row input[type=range]{flex:1;min-width:0;}
+  #panel .row select{flex:1;min-width:0;background:#0c1a20;color:#cdeef6;border:1px solid #2a4a54;font:11px 'Consolas',monospace;}
+  #panel .val{width:38px;text-align:right;color:#c8f0f6;}
+  #panel .hint{color:#5f8088;margin-top:8px;line-height:1.4;}
+</style>
+</head><body>
+<div id="topbar">
+  <span class="ttl">GRID EXHIBIT</span>
+  <span class="pill" id="build-pill">grid_v0.1</span>
+  <button id="recenter-btn">Recenter</button>
+  <button id="reseed-btn">Reseed systems</button>
+  <span id="stat">&mdash;</span>
+</div>
+<div id="panel"></div>
+<script>
+const BUILD_DATE='20260718', BUILD_SEQ='01', BUILD_ID='grid_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+const PANELW=256, TOPH=31;
+
+// ---------- config ----------
+let G = {
+  type:'polar',
+  color:[70,140,210], opacity:0.5, weight:1, bg:[6,10,18],
+  radius:1000, showBoundary:true, boundaryColor:[110,200,255], boundaryOpacity:0.85, showOrigin:true, clip:false,
+  // square
+  sqSpacing:150, sqMajor:5,
+  // polar
+  ringSpacing:150, spokeCount:12, angleOffset:0,
+  // hex
+  hexSize:110, hexFlat:false,
+  // labels
+  labels:true, labelColor:[150,200,235], labelSize:11, sectorLetters:true,
+  // context systems
+  showSystems:true, systemCount:60, systemSeed:1234
+};
+const PRESETS = {
+  blueprint:{name:'Blueprint (square)', ov:{type:'square',color:[70,140,210],opacity:0.45,weight:1,sqSpacing:150,sqMajor:5,labels:true,showBoundary:true,boundaryColor:[120,200,255]}},
+  radar:    {name:'Radar (polar)', ov:{type:'polar',color:[60,200,150],opacity:0.4,ringSpacing:150,spokeCount:12,labels:true,sectorLetters:false,boundaryColor:[110,255,200],showBoundary:true}},
+  galactic: {name:'Galactic sectors (polar)', ov:{type:'polar',color:[90,150,230],opacity:0.4,ringSpacing:120,spokeCount:16,labels:true,sectorLetters:true,angleOffset:0,boundaryColor:[130,180,255]}},
+  hexsect:  {name:'Hex sectors', ov:{type:'hex',color:[220,170,90],opacity:0.4,hexSize:120,hexFlat:false,labels:false,boundaryColor:[255,200,120]}},
+  minimal:  {name:'Minimal (faint square)', ov:{type:'square',color:[80,110,150],opacity:0.22,weight:1,sqSpacing:200,sqMajor:4,labels:false,showBoundary:false}}
+};
+let curPreset='galactic';
+const OPT_TYPE=[['square','Square (Cartesian)'],['polar','Polar (rings + spokes)'],['hex','Hex tiles']];
+const SCHEMA = [
+  ['Grid', [['type','Type','select',OPT_TYPE],['color','Line color','color'],['opacity','Opacity','range',0,1,0.01],['weight','Weight','range',0.25,4,0.25],['bg','Background','color']]],
+  ['Boundary (galaxy edge)', [['showBoundary','Boundary','bool'],['radius','Radius','range',200,4000,50],['boundaryColor','Color','color'],['boundaryOpacity','Opacity','range',0,1,0.01],['clip','Clip grid to it','bool'],['showOrigin','Origin marker','bool']]],
+  ['Square', [['sqSpacing','Spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1]]],
+  ['Polar', [['ringSpacing','Ring spacing','range',30,600,10],['spokeCount','Spokes','range',0,48,1],['angleOffset','Angle offset','range',0,360,1]]],
+  ['Hex', [['hexSize','Hex size','range',30,400,5],['hexFlat','Flat-top','bool']]],
+  ['Labels', [['labels','Labels','bool'],['sectorLetters','Sector letters','bool'],['labelColor','Color','color'],['labelSize','Size','range',8,20,1]]],
+  ['Context', [['showSystems','Show systems','bool'],['systemCount','Count','range',0,300,5],['systemSeed','Seed','range',1,9999,1]]]
+];
+
+// ---------- camera / projection ----------
+let cam={x:0,y:0,zoom:0.5};
+function cx(){ return PANELW+(width-PANELW)/2; }
+function cy(){ return height/2; }
+function w2s(wx,wy){ let z=cam.zoom; return { x:cx()+(cam.x+wx)*z, y:cy()+(cam.y+wy)*z }; }
+function visibleWorld(){ let z=cam.zoom, X=cx(), Y=cy();
+  return { x0:(PANELW-X)/z-cam.x, x1:(width-X)/z-cam.x, y0:(0-Y)/z-cam.y, y1:(height-Y)/z-cam.y }; }
+function recenter(){ cam.x=0; cam.y=0; cam.zoom=constrain(Math.min(Math.max(1,width-PANELW),Math.max(1,height))*0.42/G.radius, 0.05, 8); }
+
+// ---------- systems (placeholder galaxy for context) ----------
+let systems=[];
+function genSystems(){ systems=[]; let rs=(G.systemSeed>>>0)||1, rnd=()=>{ rs=(rs*1664525+1013904223)>>>0; return rs/4294967296; };
+  for(let i=0;i<(G.systemCount|0);i++){ let a=rnd()*Math.PI*2, r=Math.sqrt(rnd())*G.radius*0.94; systems.push({x:Math.cos(a)*r, y:Math.sin(a)*r, t:rnd()}); } }
+
+// ---------- draw helpers ----------
+function rgba(c,a){ return 'rgba('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+a+')'; }
+function segW(ax,ay,bx,by, col, w){ let a=w2s(ax,ay), b=w2s(bx,by), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
+function circW(r, col, w){ let o=w2s(0,0), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.arc(o.x,o.y, r*cam.zoom, 0, Math.PI*2); dc.stroke(); }
+function label(txt, wx, wy, dx, dy){ let s=w2s(wx,wy); noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2], 230); textSize(G.labelSize); text(txt, s.x+dx, s.y+dy); }
+function clipToBoundary(on){ let dc=drawingContext; if(on){ let o=w2s(0,0); dc.save(); dc.beginPath(); dc.arc(o.x,o.y, G.radius*cam.zoom, 0, Math.PI*2); dc.clip(); } else dc.restore(); }
+
+// ---------- grid renderers ----------
+function drawSquareGrid(){
+  let V=visibleWorld(), sp=G.sqSpacing, dc=drawingContext;
+  let x0=Math.max(V.x0, G.clip?-G.radius:V.x0), x1=Math.min(V.x1, G.clip?G.radius:V.x1);
+  let y0=Math.max(V.y0, G.clip?-G.radius:V.y0), y1=Math.min(V.y1, G.clip?G.radius:V.y1);
+  let n=Math.ceil((V.x1-V.x0)/sp)+Math.ceil((V.y1-V.y0)/sp); if(n>4000) return;   // perf guard
+  let base=rgba(G.color, G.opacity), majc=rgba(G.color, Math.min(1,G.opacity*1.9)), axc=rgba(G.color, Math.min(1,G.opacity*2.6));
+  dc.lineCap='butt';
+  for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp), major=(k%G.sqMajor===0), axis=(k===0);
+    segW(wx,V.y0,wx,V.y1, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
+  for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp), major=(k%G.sqMajor===0), axis=(k===0);
+    segW(V.x0,wy,V.x1,wy, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
+  if(G.labels){ textAlign(CENTER,TOP);
+    for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp); if(k%G.sqMajor===0) label((wx|0)+'', wx, 0, 0, 4); }
+    textAlign(LEFT,CENTER);
+    for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor===0 && k!==0) label((wy|0)+'', 0, wy, 5, 0); }
+  }
+}
+function drawPolarGrid(){
+  let V=visibleWorld(), rs=G.ringSpacing;
+  let maxR = G.clip? G.radius : Math.max(Math.hypot(V.x0,V.y0),Math.hypot(V.x1,V.y0),Math.hypot(V.x0,V.y1),Math.hypot(V.x1,V.y1));
+  let base=rgba(G.color,G.opacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9));
+  if(maxR/rs < 400) for(let r=rs; r<=maxR; r+=rs){ let major=(Math.round(r/rs)%5===0); circW(r, major?majc:base, major?G.weight*1.6:G.weight); }
+  let sc=G.spokeCount|0;
+  for(let i=0;i<sc;i++){ let a=(G.angleOffset*Math.PI/180)+i/sc*Math.PI*2; segW(0,0, Math.cos(a)*maxR, Math.sin(a)*maxR, base, G.weight); }
+  if(G.labels){
+    textAlign(LEFT,BOTTOM);
+    if(maxR/rs < 100) for(let r=rs; r<=(G.clip?G.radius:maxR); r+=rs){ if(Math.round(r/rs)%5===0) label((r|0)+'', 0, -r, 4, -2); }   // ring radii up the top spoke
+    textAlign(CENTER,CENTER);
+    for(let i=0;i<sc;i++){ let a=(G.angleOffset*Math.PI/180)+i/sc*Math.PI*2, lr=(G.clip?G.radius:Math.min(maxR, G.radius))*1.03;
+      let txt=G.sectorLetters? String.fromCharCode(65+(i%26)) : (Math.round(i/sc*360)+'°');
+      label(txt, Math.cos(a)*lr, Math.sin(a)*lr, 0, 0); }
+  }
+}
+function drawHexGrid(){
+  let V=visibleWorld(), s=G.hexSize, dc=drawingContext, col=rgba(G.color,G.opacity);
+  let w = G.hexFlat? s*1.5 : Math.sqrt(3)*s, h = G.hexFlat? Math.sqrt(3)*s : s*1.5;   // column / row pitch
+  let cols=(V.x1-V.x0)/w, rows=(V.y1-V.y0)/h; if(cols*rows>2500) return;               // perf guard
+  dc.strokeStyle=col; dc.lineWidth=G.weight;
+  for(let r=Math.floor(V.y0/h)-1; r<=V.y1/h+1; r++){
+    for(let c=Math.floor(V.x0/w)-1; c<=V.x1/w+1; c++){
+      let ox = G.hexFlat? c*w : c*w + (r&1?w/2:0);
+      let oy = G.hexFlat? r*h + (c&1?h/2:0) : r*h;
+      dc.beginPath();
+      for(let k=0;k<6;k++){ let ang=(Math.PI/180)*(60*k + (G.hexFlat?0:30)), p=w2s(ox+Math.cos(ang)*s, oy+Math.sin(ang)*s); if(k===0)dc.moveTo(p.x,p.y); else dc.lineTo(p.x,p.y); }
+      dc.closePath(); dc.stroke();
+    }
+  }
+}
+
+// ---------- main ----------
+function setup(){ pixelDensity(1); createCanvas(windowWidth,windowHeight); genSystems(); recenter(); buildPanel(); }
+function windowResized(){ resizeCanvas(windowWidth,windowHeight); }
+function draw(){
+  background(G.bg[0],G.bg[1],G.bg[2]);
+  // context systems (under the grid)
+  if(G.showSystems){ let dc=drawingContext; noStroke();
+    for(const s of systems){ let p=w2s(s.x,s.y), r=1.4+s.t*2; let c=[160+80*s.t,150+60*(1-s.t),120+90*s.t];
+      dc.fillStyle=rgba(c,0.9); dc.beginPath(); dc.arc(p.x,p.y,r,0,Math.PI*2); dc.fill(); } }
+  // grid
+  clipToBoundary(G.clip);
+  if(G.type==='square') drawSquareGrid();
+  else if(G.type==='hex') drawHexGrid();
+  else drawPolarGrid();
+  clipToBoundary(false);
+  // boundary + origin
+  if(G.showBoundary) circW(G.radius, rgba(G.boundaryColor,G.boundaryOpacity), Math.max(1.5,G.weight*1.5));
+  if(G.showOrigin){ let o=w2s(0,0), dc=drawingContext, oc=rgba(G.boundaryColor,Math.min(1,G.boundaryOpacity+0.1));
+    dc.strokeStyle=oc; dc.lineWidth=1.5; dc.beginPath(); dc.moveTo(o.x-7,o.y); dc.lineTo(o.x+7,o.y); dc.moveTo(o.x,o.y-7); dc.lineTo(o.x,o.y+7); dc.stroke();
+    dc.fillStyle=oc; dc.beginPath(); dc.arc(o.x,o.y,2.5,0,Math.PI*2); dc.fill(); }
+  document.getElementById('stat').textContent = Math.round(frameRate())+' fps · zoom '+cam.zoom.toFixed(2)+' · '+BUILD_ID;
+}
+function mouseDragged(){ if(mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; } }
+function mouseWheel(e){ if(mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.03, 8); return false; } }
+
+// ---------- controls ----------
+function rgbToHex(c){ return '#'+[0,1,2].map(i=>('0'+(c[i]|0).toString(16)).slice(-2)).join(''); }
+function hexToRgb(h){ return [parseInt(h.substr(1,2),16),parseInt(h.substr(3,2),16),parseInt(h.substr(5,2),16)]; }
+let ctrls={};
+function buildPanel(){
+  let panel=document.getElementById('panel'); panel.innerHTML=''; ctrls={};
+  // preset row
+  let pr=document.createElement('div'); pr.className='row'; let pl=document.createElement('span'); pl.className='lab'; pl.textContent='Preset'; pr.appendChild(pl);
+  let ps=document.createElement('select'); for(const k of Object.keys(PRESETS)){ let o=document.createElement('option'); o.value=k; o.textContent=PRESETS[k].name; ps.appendChild(o); } ps.value=curPreset; ps.onchange=()=>applyPreset(ps.value); pr.appendChild(ps); panel.appendChild(pr);
+  for(const [group,items] of SCHEMA){
+    let h=document.createElement('div'); h.className='grp'; h.textContent=group; panel.appendChild(h);
+    for(const it of items){
+      let [key,label,type]=it, row=document.createElement('label'); row.className='row';
+      let lab=document.createElement('span'); lab.className='lab'; lab.textContent=label; row.appendChild(lab);
+      if(type==='range'){ let inp=document.createElement('input'); inp.type='range'; inp.min=it[3];inp.max=it[4];inp.step=it[5];inp.value=G[key];
+        let val=document.createElement('span'); val.className='val'; val.textContent=G[key];
+        inp.oninput=()=>{ G[key]=parseFloat(inp.value); val.textContent=inp.value; if(key==='systemCount'||key==='systemSeed'||key==='radius') genSystems(); };
+        row.appendChild(inp); row.appendChild(val); ctrls[key]={inp,val};
+      } else if(type==='color'){ let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(G[key]); inp.oninput=()=>{ G[key]=hexToRgb(inp.value); }; row.appendChild(inp); ctrls[key]={inp};
+      } else if(type==='bool'){ let inp=document.createElement('input'); inp.type='checkbox'; inp.checked=!!G[key]; inp.oninput=()=>{ G[key]=inp.checked; }; row.appendChild(inp); ctrls[key]={inp};
+      } else if(type==='select'){ let inp=document.createElement('select'); for(const [v,l] of it[3]){ let o=document.createElement('option'); o.value=v; o.textContent=l; inp.appendChild(o); } inp.value=G[key]; inp.onchange=()=>{ G[key]=inp.value; }; row.appendChild(inp); ctrls[key]={inp}; }
+      panel.appendChild(row);
+    }
+  }
+  let hint=document.createElement('div'); hint.className='hint'; hint.textContent='World-space map grid — drag to pan, wheel to zoom (it stays anchored to the galaxy origin + radius, like the fade Map track will). Boundary circle = the galaxy edge (Radius). Presets up top. Recenter frames the boundary.'; panel.appendChild(hint);
+}
+function applyPreset(name){ let p=PRESETS[name]; if(!p) return; curPreset=name; Object.assign(G, JSON.parse(JSON.stringify(p.ov))); genSystems(); buildPanel(); }
+function reseed(){ G.systemSeed=Math.floor(Math.random()*9999)+1; genSystems(); if(ctrls.systemSeed){ ctrls.systemSeed.inp.value=G.systemSeed; ctrls.systemSeed.val.textContent=G.systemSeed; } }
+window.addEventListener('load',()=>{ document.getElementById('build-pill').textContent=BUILD_ID; document.getElementById('reseed-btn').onclick=reseed; document.getElementById('recenter-btn').onclick=recenter; });
+</script>
+</body></html>
