@@ -62,7 +62,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '19';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '23';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -99,8 +99,10 @@ let CFG = {
     baseOn: true, baseColor: [6, 8, 16], baseOpacity: 1.0,
     // IMAGE (curated photo gallery in galaxy_backgrounds/)
     imgOn: false, imgIndex: 3, imgHashPick: false, imgRot: 0, imgFlip: false, imgScale: 1.0, imgOpacity: 1.0,
-    // NEBULA (procedural soft clouds, seeded)
-    nebOn: true, nebColorA: [40, 30, 90], nebColorB: [120, 40, 110], nebCount: 42, nebScale: 1.0, nebOpacity: 0.5, nebSeed: 7,
+    // NEBULA (procedural: domain-warp / fBm / emission noise field, or legacy blobs)
+    nebOn: true, nebType: 'domainwarp', nebColorA: [40, 30, 90], nebColorB: [120, 40, 110], nebColorC: [245, 215, 185],
+    nebScale: 1.0, nebOctaves: 5, nebWarp: 1.2, nebContrast: 1.4, nebThreshold: 0.15, nebOpacity: 1.2, nebCount: 42, nebSeed: 7,
+    nebAnimOn: true, nebInterval: 5, nebStep: 0.05, nebBlend: 1.5,             // hold N s, then crossfade one step over nebBlend s
     // GRID OVERLAY
     gridOn: false, gridColor: [60, 90, 140], gridOpacity: 0.25, gridSpacing: 200, gridWeight: 1,
     // RADIAL FADE (vignette — hides image/nebula edge cutoff)
@@ -152,6 +154,7 @@ function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
 
 let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
 function draw(){
+  stepNebula(CFG.backdrop);                                                    // nebula: hold, then crossfade to the next stepped frame
   if (viewMode === 'galaxy') drawGalaxyView();
   else if (activePage === 'backdrop') drawBackdropPreview();   // isolated backdrop compilation (no sun/stars)
   else drawSunPreview();
@@ -291,7 +294,66 @@ function bd_base(P,E,B){
   P.fill(B.baseColor[0],B.baseColor[1],B.baseColor[2],255*B.baseOpacity);
   P.rect(0,0,2*E,2*E); P.pop();
 }
+// ---- procedural noise nebula (domain-warp / fBm / emission), rendered once to a texture, stepped over time ----
+const NEB_RES=176;
+let nebCur=null, nebNext=null, nebBlendTex=null, nbCurPx=null, nbNextPx=null, nebT=0, nebTnext=0, nbRenderT=0, nebFadeAmt=0, nebFading=false, nebFadeStart=0, lastNebStep=0, lastNebStaticSig='';
+function nbSmooth(a,b,x){ let t=constrain((x-a)/(b-a),0,1); return t*t*(3-2*t); }
+function nbFbm(x,y,oct){ let a=0.5,f=1,s=0,n=0; for(let o=0;o<oct;o++){ s+=a*noise(x*f,y*f,nbRenderT); n+=a; a*=0.5; f*=2; } return s/n; }
+function nbWarp(x,y,oct,w){ let q1=nbFbm(x+1.7,y+9.2,oct), q2=nbFbm(x+5.2,y+1.3,oct); return nbFbm(x+w*q1, y+w*q2, oct); }
+function nbField(x,y,B){ let oct=B.nebOctaves|0;
+  if(B.nebType==='fbm')      return nbFbm(x,y,oct);
+  if(B.nebType==='emission') return constrain(nbFbm(x,y,oct)-0.7*Math.max(0,nbFbm(x+11,y+7,3)-0.45),0,1);
+  return nbWarp(x,y,oct,B.nebWarp);                                            // domainwarp (default)
+}
+function nbPalette(t,B){ t=constrain(t,0,1);
+  if(t<0.5){ let u=t*2; return [lerp(B.nebColorA[0],B.nebColorB[0],u),lerp(B.nebColorA[1],B.nebColorB[1],u),lerp(B.nebColorA[2],B.nebColorB[2],u)]; }
+  let u=(t-0.5)*2; return [lerp(B.nebColorB[0],B.nebColorC[0],u),lerp(B.nebColorB[1],B.nebColorC[1],u),lerp(B.nebColorB[2],B.nebColorC[2],u)];
+}
+function nebSigStatic(B){ return [B.nebType,B.nebScale,B.nebOctaves,B.nebWarp,B.nebContrast,B.nebThreshold,B.nebOpacity,B.nebSeed,
+  B.nebColorA.join(','),B.nebColorB.join(','),B.nebColorC.join(',')].join('|'); }                                 // params only, not time
+function renderNebInto(tex, tval, B){                                          // pixel-fill the field at time tval (expensive; once per step or param change)
+  if(!tex) return;
+  nbRenderT=tval; noiseSeed(B.nebSeed|0);
+  tex.clear(); tex.loadPixels();
+  let R=NEB_RES, S=B.nebScale*4, C=B.nebContrast, th=B.nebThreshold, op=B.nebOpacity, px=tex.pixels;
+  for(let yy=0;yy<R;yy++) for(let xx=0;xx<R;xx++){
+    let v=Math.pow(constrain(nbField((xx/R)*S,(yy/R)*S,B),0,1), C);
+    let a=nbSmooth(th,1,v)*op, col=nbPalette(v,B), o=4*(yy*R+xx);
+    px[o]=col[0]|0; px[o+1]=col[1]|0; px[o+2]=col[2]|0; px[o+3]=Math.min(255,a*255)|0;
+  }
+  tex.updatePixels();
+}
+function ensureNeb(B){                                                         // lazily create the textures; re-render on a parameter change
+  if(!nebCur){ nebCur=createGraphics(NEB_RES,NEB_RES); nebCur.pixelDensity(1); nebNext=createGraphics(NEB_RES,NEB_RES); nebNext.pixelDensity(1);
+    nebBlendTex=createGraphics(NEB_RES,NEB_RES); nebBlendTex.pixelDensity(1); nebBlendTex.loadPixels();
+    renderNebInto(nebCur, nebT, B); lastNebStaticSig=nebSigStatic(B); return; }
+  let sig=nebSigStatic(B);
+  if(sig!==lastNebStaticSig){ renderNebInto(nebCur, nebT, B); lastNebStaticSig=sig; nebFading=false; nebFadeAmt=0; }
+}
+function lerpNebPixels(f){                                                     // true cross-dissolve: out = cur*(1-f) + next*f (per channel incl. alpha)
+  let a=nbCurPx, b=nbNextPx, o=nebBlendTex.pixels; if(!a||!b||!o) return;
+  for(let i=0;i<o.length;i++) o[i]=a[i]+(b[i]-a[i])*f;
+  nebBlendTex.updatePixels();
+}
+function nbDrawTex(P,E,B){                                                     // blit current, or the dissolved cur->next texture mid-step
+  ensureNeb(B);
+  let tex=nebCur;
+  if(nebFading && nebFadeAmt>0){ lerpNebPixels(constrain(nebFadeAmt,0,1)); tex=nebBlendTex; }
+  P.push(); P.imageMode(CENTER); P.image(tex, 0,0, 2*E, 2*E); P.pop();
+}
+function stepNebula(B){                                                        // per-frame: hold for Interval, then crossfade one Step over Blend seconds
+  if(!(B.nebOn && B.nebAnimOn && B.nebType!=='blobs')){ nebFading=false; return; }
+  if(nebFading){
+    nebFadeAmt = B.nebBlend>0 ? (millis()-nebFadeStart)/(B.nebBlend*1000) : 1;
+    if(nebFadeAmt>=1){ let tmp=nebCur; nebCur=nebNext; nebNext=tmp; nebT=nebTnext; nebFadeAmt=0; nebFading=false; lastNebStep=millis(); invalidateBackdrop(); }
+  } else if(nebCur && millis()-lastNebStep > B.nebInterval*1000){
+    nebTnext=nebT+B.nebStep; renderNebInto(nebNext, nebTnext, B);                // render the next frame...
+    nebCur.loadPixels(); nebNext.loadPixels(); nbCurPx=nebCur.pixels; nbNextPx=nebNext.pixels;   // ...cache both for the dissolve
+    nebFadeAmt=0; nebFadeStart=millis(); nebFading=true;
+  }
+}
 function bd_neb(P,E,B){
+  if(B.nebType && B.nebType!=='blobs'){ nbDrawTex(P,E,B); return; }            // procedural noise nebula (texture)
   P.push(); P.noStroke(); P.blendMode(ADD);
   let n=B.nebCount|0;
   for(let i=0;i<n;i++){
@@ -336,7 +398,7 @@ function drawBackdrop(){                                                      //
     if(!B[L+'On']) continue;
     if(B['bake_'+L]!==false){                                                 // baked: blit this layer's own buffer (rebuild if dirty/resized)
       let b=bdBuf[L];
-      if(bdDirty || !b || b.width!==res) b=bakeBdLayer(L, E, res);
+      if(bdDirty || !b || b.width!==res || (L==='neb' && nebFading)) b=bakeBdLayer(L, E, res);   // re-bake neb each frame during the crossfade
       push(); if(BD_BLEND[L]==='add') blendMode(ADD); imageMode(CENTER); image(b, 0,0, 2*E, 2*E); pop();
     } else {                                                                  // live: draw directly, at its position in the stack
       drawOneBdLayer(window, E, L);
@@ -586,13 +648,18 @@ const BD_IMGS = ['galaxy_backgrounds/bright_01.png','galaxy_backgrounds/cigar_01
   'galaxy_backgrounds/gal_neb_19.jpg','galaxy_backgrounds/gal_neb_20.jpg','galaxy_backgrounds/gal_neb_21.jpg',
   'galaxy_backgrounds/gal_neb_23.jpg','galaxy_backgrounds/gal_neb_24.jpg','galaxy_backgrounds/milky_01.png','galaxy_backgrounds/pink01.jpg'];
 const BD_IMG_OPTS = BD_IMGS.map((p,i)=>[i, p.split('/').pop().replace(/\.(png|jpg)$/,'')]);
+const NEB_TYPE_OPTS = [['domainwarp','Domain warp'],['fbm','fBm clouds'],['emission','Emission+dust'],['blobs','Blobs (legacy)']];
 const BACKDROP_SCHEMA = [
   ['Global', [['cover','Cover ×radius','range',0.5,3,0.05],['bakeRes','Bake res','range',256,2048,128]]],
   ['Base fill', [['baseOn','Base','bool'],['baseColor','Color','color'],['baseOpacity','Opacity','range',0,1,0.01]]],
   ['Image', [['imgOn','Image','bool'],['imgIndex','Which','select',BD_IMG_OPTS],['imgHashPick','Hash pick','bool'],
     ['imgRot','Rotate ×90°','range',0,3,1],['imgFlip','Mirror','bool'],['imgScale','Scale','range',0.3,3,0.05],['imgOpacity','Opacity','range',0,1,0.01]]],
-  ['Nebula', [['nebOn','Nebula','bool'],['nebColorA','Color A','color'],['nebColorB','Color B','color'],
-    ['nebCount','Cloud count','range',0,120,1],['nebScale','Cloud size','range',0.2,3,0.05],['nebOpacity','Opacity','range',0,1,0.01],['nebSeed','Seed','range',1,999,1]]],
+  ['Nebula', [['nebOn','Nebula','bool'],['nebType','Type','select',NEB_TYPE_OPTS],
+    ['nebColorA','Color A','color'],['nebColorB','Color B','color'],['nebColorC','Color C','color'],
+    ['nebScale','Scale','range',0.2,4,0.05],['nebOctaves','Octaves','range',1,7,1],['nebWarp','Warp amt','range',0,3,0.05],
+    ['nebContrast','Contrast','range',0.4,3,0.05],['nebThreshold','Threshold','range',0,0.8,0.01],['nebOpacity','Intensity','range',0,2,0.01],
+    ['nebCount','Blob count','range',0,120,1],['nebSeed','Seed','range',1,999,1]]],
+  ['Nebula motion', [['nebAnimOn','Step over time','bool'],['nebInterval','Interval (s)','range',1,30,0.5],['nebStep','Step size','range',0.005,0.3,0.005],['nebBlend','Blend (s)','range',0,5,0.1]]],
   ['Grid overlay', [['gridOn','Grid','bool'],['gridColor','Color','color'],['gridOpacity','Opacity','range',0,1,0.01],
     ['gridSpacing','Spacing','range',50,600,10],['gridWeight','Line weight','range',0.5,4,0.5]]],
   ['Radial fade (hide edges)', [['fadeOn','Fade','bool'],['fadeColor','Edge color','color'],
@@ -676,7 +743,7 @@ function buildControls(schema, target, body, onChange){
         let inp=document.createElement('select'); let opts=item[3]||[];
         for(const [v,l] of opts){ let o=document.createElement('option'); o.value=v; o.textContent=l; inp.appendChild(o); }
         inp.value=target[key];
-        inp.oninput=()=>{ target[key]=parseInt(inp.value); if(onChange) onChange(); }; row.appendChild(inp);
+        inp.oninput=()=>{ let v=inp.value; target[key]=(/^-?\d+$/.test(v)?parseInt(v):v); if(onChange) onChange(); }; row.appendChild(inp);
         controls[key]={type, input:inp};
       }
       body.appendChild(row);
