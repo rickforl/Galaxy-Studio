@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Lanes Exhibit</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#04070c;font-family:'Consolas','Monaco',monospace;}
+  #topbar{position:fixed;top:0;left:0;right:0;height:31px;display:flex;align-items:center;gap:8px;padding:0 10px;
+    background:rgba(6,10,16,0.96);border-bottom:1px solid #244a5a;z-index:20;box-sizing:border-box;}
+  #topbar .ttl{color:#9fe0d0;font-weight:bold;letter-spacing:1px;font-size:12px;}
+  .pill{background:#163b34;color:#9fe8d8;border:1px solid #3a8c74;border-radius:9px;padding:1px 9px;font:10px 'Consolas',monospace;font-weight:bold;letter-spacing:.5px;}
+  #topbar button{background:#163b34;color:#cdefe6;border:1px solid #3a8c74;font:11px 'Consolas',monospace;padding:3px 10px;cursor:pointer;}
+  #topbar button:hover{background:#1e4d40;}
+  #stat{margin-left:auto;color:#8fe0c8;font:11px 'Consolas',monospace;}
+  #panel{position:fixed;top:31px;left:0;width:256px;max-height:calc(100vh - 31px);overflow-y:auto;
+    background:rgba(8,14,18,0.94);border-right:1px solid #2a4a58;padding:8px 10px 40px;
+    color:#c8dee4;font:11px 'Consolas',monospace;z-index:10;box-sizing:border-box;}
+  #panel .grp{color:#8fd0c0;font-weight:bold;letter-spacing:.5px;margin:10px 0 4px;border-bottom:1px solid #223a40;padding-bottom:2px;}
+  #panel .row{display:flex;align-items:center;gap:6px;margin:3px 0;}
+  #panel .lab{width:82px;flex:none;color:#9bc4bc;}
+  #panel .row input[type=range]{flex:1;min-width:0;}
+  #panel .row select{flex:1;min-width:0;background:#0e1e22;color:#d0f0e6;border:1px solid #2a5a50;font:11px 'Consolas',monospace;}
+  #panel .val{width:34px;text-align:right;color:#d0f0e6;}
+  #panel .hint{color:#60807a;margin-top:8px;line-height:1.4;}
+</style>
+</head><body>
+<div id="topbar">
+  <span class="ttl">LANES EXHIBIT</span>
+  <span class="pill" id="build-pill">lane_v0.1</span>
+  <button id="reseed-btn">Reseed</button>
+  <span id="stat">—</span>
+</div>
+<div id="panel"></div>
+<script>
+const BUILD_DATE='20260718', BUILD_SEQ='03', BUILD_ID='lane_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+const PANELW=256, TOPH=31;
+const TIER_COLS=[[185,205,235],[255,228,150],[255,150,115]];   // T1 white-blue, T2 gold, T3 orange
+const SPECTRAL=[[150,176,255],[200,214,255],[255,255,255],[255,246,214],[255,212,162],[255,168,128]];
+
+let L = {
+  // Cluster
+  seed:1234, nodes:60, radius:340, minDist:80, scale:1.0, bg:[4,6,11],
+  // Tiers
+  t2Frac:0.14, t3Frac:0.03, tierLinkBase:3, tierLinkMult:2,
+  // Connections
+  connMode:'knn', neighbors:4, officialDist:180, unofficialMult:2.2, unoOn:true, unofficialLinks:1,
+  // Color
+  colorMode:'multi', offColor:[120,200,255], unoColor:[255,90,90],
+  // Official lane style
+  offStyle:'gradient', offW:1.8, offOpacity:0.75, offGlow:2.2, offTwoWay:true, offLaneGap:4, offEndGap:16, offEndFade:0.15, offCurve:0,
+  // Unofficial lane style
+  unoBeamless:false, unoStyle:'dashed', unoTwoWay:false, unoW:1.0, unoOpacity:0.4, unoGlow:1.4, unoLaneGap:3, unoEndGap:14, unoEndFade:0.15, unoCurve:0,
+  // Path shape (winding lanes via midpoint displacement)
+  pathMode:'straight', pathRough:0.18, pathDetail:4,
+  // Dash + animation (lane-intrinsic, no ships)
+  dashLen:7, dashGap:7, flowDash:false, breathe:false, breatheSpeed:1.0, breatheAmt:0.4, animSpeed:1.0,
+  // Nodes
+  nodeShow:true, nodeMode:'tier', nodeSize:3, nodeTierScale:1.6, nodeColor:[255,238,205], nodeGlow:2.5, nodeRing:false
+};
+const OPT_CONN=[['knn','K-nearest (tier)'],['threshold','All within range'],['mst','Min spanning tree'],['gabriel','Gabriel web']];
+const OPT_COLOR=[['multi','Multicolor (random)'],['type','By type off/uno'],['tier','By tier'],['single','Single color']];
+const OPT_STYLE=[['gradient','Gradient (soft ends)'],['solid','Solid'],['glow','Glow + core'],['dashed','Dashed'],['taper','Taper']];
+const OPT_NODE=[['uniform','Uniform'],['tier','By tier'],['spectral','Spectral']];
+const OPT_PATH=[['straight','Straight / curve'],['fractal','Fractal (jagged)'],['river','River (meander)'],['road','Road (gentle)']];
+const SCHEMA=[
+  ['Cluster', [['seed','Seed','range',0,9999,1],['nodes','Nodes','range',5,180,1],['radius','Radius','range',100,600,10],['minDist','Min spacing','range',20,160,5],['scale','Scale','range',0.4,2,0.05],['bg','Background','color']]],
+  ['Tiers', [['t2Frac','T2 fraction','range',0,0.5,0.01],['t3Frac','T3 fraction','range',0,0.2,0.005],['tierLinkBase','Links base','range',1,8,1],['tierLinkMult','Links/tier','range',0,4,1]]],
+  ['Connections', [['connMode','Strategy','select',OPT_CONN],['neighbors','Neighbors','range',1,10,1],['officialDist','Official range','range',60,400,10],['unofficialMult','Unofficial ×','range',1.2,3.5,0.05],['unoOn','Unofficial on','bool'],['unofficialLinks','Uno links/sys','range',0,4,1]]],
+  ['Color', [['colorMode','Mode','select',OPT_COLOR],['offColor','Official/single','color'],['unoColor','Unofficial','color']]],
+  ['Official lanes', [['offStyle','Style','select',OPT_STYLE],['offW','Width','range',0.3,6,0.1],['offOpacity','Opacity','range',0,1,0.01],['offGlow','Glow','range',0,5,0.1],['offTwoWay','Two-way','bool'],['offLaneGap','Lane gap','range',0,14,0.5],['offEndGap','Node gap','range',0,40,1],['offEndFade','End fade','range',0,0.49,0.01],['offCurve','Curve','range',-2,2,0.05]]],
+  ['Unofficial lanes', [['unoBeamless','Beamless','bool'],['unoStyle','Style','select',OPT_STYLE],['unoTwoWay','Two-way','bool'],['unoW','Width','range',0.3,6,0.1],['unoOpacity','Opacity','range',0,1,0.01],['unoGlow','Glow','range',0,5,0.1],['unoLaneGap','Lane gap','range',0,14,0.5],['unoEndGap','Node gap','range',0,40,1],['unoEndFade','End fade','range',0,0.49,0.01],['unoCurve','Curve','range',-2,2,0.05]]],
+  ['Path shape', [['pathMode','Path','select',OPT_PATH],['pathRough','Roughness','range',0,0.6,0.01],['pathDetail','Detail','range',1,6,1]]],
+  ['Dash & animation', [['dashLen','Dash len','range',1,30,1],['dashGap','Dash gap','range',1,30,1],['flowDash','Flow dashes','bool'],['breathe','Breathe','bool'],['breatheSpeed','Breathe spd','range',0.1,3,0.05],['breatheAmt','Breathe amt','range',0,1,0.01],['animSpeed','Anim speed','range',-3,3,0.05]]],
+  ['Nodes', [['nodeShow','Show','bool'],['nodeMode','Mode','select',OPT_NODE],['nodeSize','Size','range',0.5,8,0.5],['nodeTierScale','Tier scale','range',1,3,0.1],['nodeColor','Color','color'],['nodeGlow','Glow','range',0,5,0.1],['nodeRing','Ring','bool']]]
+];
+const PRESETS={
+  galaxy01:{name:'01 galaxy_01 multicolor', ov:{connMode:'knn',colorMode:'multi',offStyle:'gradient',offTwoWay:true,offLaneGap:4,offEndFade:0.15,offW:1.8,offOpacity:0.85,offEndGap:16,unoOn:true,unoBeamless:true,nodeMode:'tier',pathMode:'straight',bg:[4,6,11]}},
+  economy: {name:'02 IE economy blue/red', ov:{connMode:'knn',colorMode:'type',offColor:[100,150,255],unoColor:[255,60,60],offStyle:'gradient',offTwoWay:false,offW:2.4,offOpacity:0.8,unoOn:true,unoBeamless:false,unoStyle:'solid',unoW:1,unoOpacity:0.28,nodeMode:'tier',pathMode:'straight'}},
+  neon:    {name:'03 neon glow', ov:{colorMode:'single',offColor:[120,240,255],offStyle:'glow',offGlow:3,offW:2,offOpacity:0.9,offTwoWay:false,unoStyle:'glow',unoBeamless:false,pathMode:'straight',bg:[2,3,8]}},
+  blueprint:{name:'04 blueprint', ov:{colorMode:'single',offColor:[130,195,235],offStyle:'dashed',offTwoWay:false,offW:1,offOpacity:0.7,dashLen:5,dashGap:5,unoStyle:'dashed',pathMode:'straight',bg:[6,14,22],nodeColor:[185,225,255]}},
+  minimal: {name:'05 minimal', ov:{colorMode:'type',offStyle:'solid',offTwoWay:false,offW:1,offOpacity:0.55,offGlow:0,offEndGap:8,unoBeamless:true,nodeMode:'uniform',nodeSize:2,nodeGlow:0.6,pathMode:'straight'}},
+  mst:     {name:'06 MST backbone', ov:{connMode:'mst',colorMode:'single',offColor:[160,200,255],offStyle:'solid',offTwoWay:false,offW:1.4,offOpacity:0.7,offEndGap:10,unoOn:false,pathMode:'straight'}},
+  web:     {name:'07 Gabriel web', ov:{connMode:'gabriel',colorMode:'tier',offStyle:'gradient',offTwoWay:false,offW:1.4,offOpacity:0.6,unoOn:false,nodeMode:'tier',pathMode:'straight'}},
+  taper:   {name:'08 tapered arcs', ov:{colorMode:'tier',offStyle:'taper',offTwoWay:false,offW:3,offOpacity:0.7,offCurve:0.6,offEndGap:14,unoStyle:'taper',unoCurve:-0.6,nodeMode:'tier',pathMode:'straight'}},
+  rivers:  {name:'09 rivers', ov:{connMode:'mst',colorMode:'single',offColor:[90,175,235],offStyle:'gradient',offTwoWay:false,offW:2.4,offOpacity:0.7,offEndGap:12,offEndFade:0.1,unoOn:false,nodeMode:'tier',pathMode:'river',pathRough:0.26,pathDetail:4,bg:[3,8,14]}},
+  roads:   {name:'10 roads', ov:{connMode:'gabriel',colorMode:'single',offColor:[228,208,150],offStyle:'solid',offTwoWay:false,offW:1.4,offOpacity:0.65,offEndGap:10,unoOn:false,nodeMode:'tier',pathMode:'road',pathRough:0.16,pathDetail:5,bg:[6,7,10]}},
+  lightning:{name:'11 lightning (fractal)', ov:{connMode:'knn',colorMode:'single',offColor:[150,220,255],offStyle:'glow',offGlow:2.4,offW:1.4,offOpacity:0.85,offTwoWay:false,offEndGap:8,unoOn:false,nodeMode:'tier',pathMode:'fractal',pathRough:0.3,pathDetail:5,bg:[2,3,8]}}
+};
+let activePreset='galaxy01';
+
+// ---- generation ----
+let nodes=[], lanes=[], needsGen=true, needsLanes=false, needsPath=false, breatheFactor=1;
+function dist2(i,j){ let dx=nodes[i].x-nodes[j].x, dy=nodes[i].y-nodes[j].y; return dx*dx+dy*dy; }
+function ek(a,b){ return a<b?a+'_'+b:b+'_'+a; }
+function genNodes(){
+  randomSeed(L.seed|0); nodes=[];
+  let R=L.radius, minD=L.minDist, N=L.nodes|0, tries=0;
+  while(nodes.length<N && tries<N*300){ tries++;
+    let a=random(TWO_PI), rr=R*Math.sqrt(random()), x=Math.cos(a)*rr, y=Math.sin(a)*rr, ok=true;
+    for(const n of nodes){ let dx=n.x-x, dy=n.y-y; if(dx*dx+dy*dy<minD*minD){ ok=false; break; } }
+    if(ok) nodes.push({x,y});
+  }
+  for(const n of nodes){ let r=random(); n.tier = r<L.t3Frac?3:(r<L.t3Frac+L.t2Frac?2:1); n.spec=Math.floor(random(SPECTRAL.length)); }
+  buildLanes();
+}
+function mkLane(a,b,official){
+  let h=((a*131+b*977+(L.seed|0)*7)>>>0), nx=()=>{ h=(h*1664525+1013904223)>>>0; return h/4294967296; };
+  return { a,b,official, col:[50+nx()*205|0,50+nx()*205|0,50+nx()*205|0], col2:[50+nx()*205|0,50+nx()*205|0,50+nx()*205|0], r:nx() };
+}
+function knnEdges(cap){ let e=[], seen=new Set(), cap2=cap*cap;
+  for(let i=0;i<nodes.length;i++){ let K=L.tierLinkBase+nodes[i].tier*L.tierLinkMult, cand=[];
+    for(let j=0;j<nodes.length;j++){ if(i===j)continue; let d2=dist2(i,j); if(d2<=cap2) cand.push({j,d2}); }
+    cand.sort((a,b)=>a.d2-b.d2);
+    for(let k=0;k<Math.min(K,cand.length);k++){ let j=cand[k].j, key=ek(i,j); if(seen.has(key))continue; seen.add(key); e.push([i,j]); } }
+  return e; }
+function thresholdEdges(cap){ let e=[], cap2=cap*cap; for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++) if(dist2(i,j)<=cap2) e.push([i,j]); return e; }
+function mstEdges(){ let n=nodes.length; if(n<2)return[]; let inT=new Array(n).fill(false), me=new Array(n).fill(Infinity), par=new Array(n).fill(-1), e=[]; me[0]=0;
+  for(let it=0;it<n;it++){ let u=-1; for(let v=0;v<n;v++) if(!inT[v]&&(u<0||me[v]<me[u])) u=v; if(u<0)break; inT[u]=true; if(par[u]>=0) e.push([par[u],u]);
+    for(let v=0;v<n;v++) if(!inT[v]){ let d2=dist2(u,v); if(d2<me[v]){ me[v]=d2; par[v]=u; } } }
+  return e; }
+function gabrielEdges(cap){ let e=[], cap2=cap*cap; for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){ let d2=dist2(i,j); if(d2>cap2)continue;
+  let mx=(nodes[i].x+nodes[j].x)/2, my=(nodes[i].y+nodes[j].y)/2, r2=d2/4, ok=true;
+  for(let k=0;k<nodes.length;k++){ if(k===i||k===j)continue; let dx=nodes[k].x-mx, dy=nodes[k].y-my; if(dx*dx+dy*dy<r2){ ok=false; break; } }
+  if(ok) e.push([i,j]); } return e; }
+function buildLanes(){
+  lanes=[]; let seen=new Set(), oDist=L.officialDist;
+  let base = L.connMode==='threshold'?thresholdEdges(oDist) : L.connMode==='mst'?mstEdges() : L.connMode==='gabriel'?gabrielEdges(oDist*1.3) : knnEdges(oDist);
+  for(const [a,b] of base){ let key=ek(a,b); if(seen.has(key))continue; seen.add(key); lanes.push(mkLane(a,b, dist2(a,b)<oDist*oDist)); }
+  if(L.unoOn && L.unofficialLinks>0){ let lo=oDist, hi=oDist*L.unofficialMult, lo2=lo*lo, hi2=hi*hi;
+    for(let i=0;i<nodes.length;i++){ let cand=[]; for(let j=0;j<nodes.length;j++){ if(i===j)continue; let d2=dist2(i,j); if(d2>=lo2&&d2<hi2) cand.push({j,d2}); } cand.sort((a,b)=>a.d2-b.d2);
+      for(let k=0;k<Math.min(L.unofficialLinks,cand.length);k++){ let j=cand[k].j, key=ek(i,j); if(seen.has(key))continue; seen.add(key); lanes.push(mkLane(i,j,false)); } } }
+  regenPaths(); needsLanes=false;
+}
+function genPath(seed){                                     // midpoint displacement -> {t,d} points (d = perpendicular fraction of length)
+  if(L.pathMode==='straight') return null;
+  let pts=[{t:0,d:0},{t:1,d:0}], h=seed>>>0, rnd=()=>{ h=(h*1664525+1013904223)>>>0; return h/4294967296*2-1; };
+  let iters=L.pathDetail|0, rough=L.pathRough*(L.pathMode==='road'?0.5:1);
+  for(let it=0;it<iters;it++){ let nx=[pts[0]];
+    for(let i=0;i<pts.length-1;i++){ let A=pts[i], B=pts[i+1]; nx.push({t:(A.t+B.t)/2, d:(A.d+B.d)/2 + rnd()*rough*Math.pow(0.55,it)}); nx.push(B); }
+    pts=nx; }
+  return pts;
+}
+function regenPaths(){ for(const ln of lanes) ln.td=genPath(ln.a*131+ln.b*977+(L.seed|0)*31); needsPath=false; }
+
+// ---- rendering ----
+function rgba(c,a){ return 'rgba('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+a+')'; }
+function laneColor(ln, which){
+  if(L.colorMode==='multi') return which?ln.col2:ln.col;
+  if(L.colorMode==='type')  return ln.official?L.offColor:L.unoColor;
+  if(L.colorMode==='tier')  return TIER_COLS[Math.max(nodes[ln.a].tier,nodes[ln.b].tier)-1];
+  return L.offColor;
+}
+function drawBeam(ax,ay,bx,by, laneOff, td, col, st,w,op,glow,endFade,curve){
+  let dx=bx-ax, dy=by-ay, len=Math.hypot(dx,dy); if(len<1) return; let ux=dx/len, uy=dy/len, nx=-uy, ny=ux;
+  if(laneOff){ ax+=nx*laneOff; ay+=ny*laneOff; bx+=nx*laneOff; by+=ny*laneOff; }
+  let mx=(ax+bx)/2, my=(ay+by)/2, cpx=mx-uy*curve*len*0.12, cpy=my+ux*curve*len*0.12;
+  let dc=drawingContext; dc.lineCap='round';
+  if(st==='taper'){ let Np=18; dc.setLineDash([]); dc.fillStyle=rgba(col,op); dc.beginPath();   // spindle (straight/curve only)
+    let pt=t=>({x:(1-t)*(1-t)*ax+2*(1-t)*t*cpx+t*t*bx, y:(1-t)*(1-t)*ay+2*(1-t)*t*cpy+t*t*by});
+    let nrm=t=>{ let p=pt(Math.min(1,t+0.02)), q=pt(Math.max(0,t-0.02)), tx=p.x-q.x, ty=p.y-q.y, tl=Math.hypot(tx,ty)||1; return {x:-ty/tl,y:tx/tl}; };
+    for(let i=0;i<=Np;i++){ let t=i/Np, ww=w*(0.35+1.4*Math.sin(Math.PI*t)), p=pt(t), n=nrm(t); if(i===0)dc.moveTo(p.x+n.x*ww,p.y+n.y*ww); else dc.lineTo(p.x+n.x*ww,p.y+n.y*ww); }
+    for(let i=Np;i>=0;i--){ let t=i/Np, ww=w*(0.35+1.4*Math.sin(Math.PI*t)), p=pt(t), n=nrm(t); dc.lineTo(p.x-n.x*ww,p.y-n.y*ww); }
+    dc.closePath(); dc.fill(); return; }
+  let build=()=>{ dc.beginPath();
+    if(!td){ dc.moveTo(ax,ay); dc.quadraticCurveTo(cpx,cpy,bx,by); return; }
+    let P=td.map(p=>({x:ax+ux*len*p.t + nx*p.d*len, y:ay+uy*len*p.t + ny*p.d*len}));   // map {t,d} onto the (offset) A->B axis
+    dc.moveTo(P[0].x,P[0].y);
+    if(L.pathMode==='fractal'){ for(let i=1;i<P.length;i++) dc.lineTo(P[i].x,P[i].y); }
+    else { for(let i=1;i<P.length-1;i++){ let hx=(P[i].x+P[i+1].x)/2, hy=(P[i].y+P[i+1].y)/2; dc.quadraticCurveTo(P[i].x,P[i].y,hx,hy); } dc.lineTo(P[P.length-1].x,P[P.length-1].y); }   // smooth river/road
+  };
+  if(st==='glow'){ dc.setLineDash([]); dc.strokeStyle=rgba(col,0.22*op); dc.lineWidth=Math.max(0.5,w*glow*2.2); build(); dc.stroke(); dc.strokeStyle=rgba(col,op); dc.lineWidth=w; build(); dc.stroke(); return; }
+  if(st==='dashed'){ dc.setLineDash([L.dashLen,L.dashGap]); if(L.flowDash) dc.lineDashOffset=-(millis()*0.001)*40*L.animSpeed; dc.strokeStyle=rgba(col,op); dc.lineWidth=w; build(); dc.stroke(); dc.setLineDash([]); dc.lineDashOffset=0; return; }
+  if(st==='solid'){ dc.setLineDash([]); dc.strokeStyle=rgba(col,op); dc.lineWidth=w; build(); dc.stroke(); return; }
+  dc.setLineDash([]); let g=dc.createLinearGradient(ax,ay,bx,by), f=Math.max(0.001,Math.min(0.49,endFade));   // gradient soft ends
+  g.addColorStop(0,rgba(col,0)); g.addColorStop(f,rgba(col,op)); g.addColorStop(1-f,rgba(col,op)); g.addColorStop(1,rgba(col,0));
+  dc.strokeStyle=g; dc.lineWidth=w; build(); dc.stroke();
+}
+function drawLane(ln, pcx, pcy){
+  let s=L.scale, A=nodes[ln.a], B=nodes[ln.b];
+  let ax=pcx+A.x*s, ay=pcy+A.y*s, bx=pcx+B.x*s, by=pcy+B.y*s;
+  let dx=bx-ax, dy=by-ay, len=Math.hypot(dx,dy); if(len<2) return; let ux=dx/len, uy=dy/len, o=ln.official;
+  if(!o && L.unoBeamless) return;
+  let gap=(o?L.offEndGap:L.unoEndGap)*s; ax+=ux*gap; ay+=uy*gap; bx-=ux*gap; by-=uy*gap;
+  let st=o?L.offStyle:L.unoStyle, w=(o?L.offW:L.unoW), op=(o?L.offOpacity:L.unoOpacity)*breatheFactor, glow=o?L.offGlow:L.unoGlow, ef=o?L.offEndFade:L.unoEndFade, cv=o?L.offCurve:L.unoCurve;
+  let td=(L.pathMode!=='straight')?ln.td:null;
+  if(o?L.offTwoWay:L.unoTwoWay){ let off=(o?L.offLaneGap:L.unoLaneGap)*(0.6+0.8*ln.r);
+    drawBeam(ax,ay,bx,by,  off, td, laneColor(ln,0), st,w,op,glow,ef,cv);
+    drawBeam(ax,ay,bx,by, -off, td, laneColor(ln,1), st,w,op,glow,ef,cv);
+  } else drawBeam(ax,ay,bx,by, 0, td, laneColor(ln,0), st,w,op,glow,ef,cv);
+}
+function nodeCol(n){ return L.nodeMode==='tier'?TIER_COLS[n.tier-1] : L.nodeMode==='spectral'?SPECTRAL[n.spec] : L.nodeColor; }
+function nodeSz(n){ return L.nodeSize*(1+(n.tier-1)*(L.nodeTierScale-1)); }
+
+function setup(){ pixelDensity(1); createCanvas(windowWidth, windowHeight); buildPanel(); applyPreset(activePreset); }
+function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
+let fpsT=0, lastFps=0;
+function draw(){
+  if(needsGen){ genNodes(); needsGen=false; } else if(needsLanes) buildLanes(); else if(needsPath) regenPaths();
+  background(L.bg[0],L.bg[1],L.bg[2]);
+  breatheFactor = L.breathe ? (1 - L.breatheAmt*(0.5+0.5*Math.sin(millis()*0.001*L.breatheSpeed*2))) : 1;
+  let pcx=(PANELW+width)/2, pcy=height/2, dc=drawingContext;
+  push(); blendMode(ADD);
+  for(const ln of lanes) drawLane(ln, pcx, pcy);
+  pop(); blendMode(BLEND); dc.setLineDash([]);
+  if(L.nodeShow){ let s=L.scale;
+    if(L.nodeGlow>0){ push(); blendMode(ADD);
+      for(const n of nodes){ let x=pcx+n.x*s, y=pcy+n.y*s, c=nodeCol(n), r=nodeSz(n)*L.nodeGlow;
+        let g=dc.createRadialGradient(x,y,0,x,y,r); g.addColorStop(0,rgba(c,0.5)); g.addColorStop(1,rgba(c,0)); dc.fillStyle=g; dc.beginPath(); dc.arc(x,y,r,0,TWO_PI); dc.fill(); }
+      pop(); blendMode(BLEND); }
+    for(const n of nodes){ let x=pcx+n.x*s, y=pcy+n.y*s, c=nodeCol(n), sz=nodeSz(n);
+      dc.fillStyle=rgba(c,1); dc.beginPath(); dc.arc(x,y,sz,0,TWO_PI); dc.fill();
+      if(L.nodeRing){ dc.strokeStyle=rgba(c,0.55); dc.lineWidth=1; dc.beginPath(); dc.arc(x,y,sz*2.4,0,TWO_PI); dc.stroke(); } }
+  }
+  if(millis()-fpsT>400){ fpsT=millis(); lastFps=Math.round(frameRate()); let off=lanes.filter(l=>l.official).length;
+    document.getElementById('stat').textContent=nodes.length+' nodes · '+lanes.length+' lanes ('+off+' off / '+(lanes.length-off)+' uno) · '+lastFps+' fps · '+BUILD_ID; }
+}
+
+// ---- controls ----
+function rgbToHex(c){ return '#'+[0,1,2].map(i=>('0'+(c[i]|0).toString(16)).slice(-2)).join(''); }
+function hexToRgb(h){ return [parseInt(h.substr(1,2),16),parseInt(h.substr(3,2),16),parseInt(h.substr(5,2),16)]; }
+const GEN_KEYS=new Set(['seed','nodes','radius','minDist','t2Frac','t3Frac']);
+const LANE_KEYS=new Set(['connMode','neighbors','officialDist','unofficialMult','unoOn','unofficialLinks','tierLinkBase','tierLinkMult']);
+const PATH_KEYS=new Set(['pathMode','pathRough','pathDetail']);
+let ctrls={};
+function buildPanel(){
+  let panel=document.getElementById('panel'); panel.innerHTML=''; ctrls={};
+  let pr=document.createElement('div'); pr.className='row';
+  let pl=document.createElement('span'); pl.className='lab'; pl.textContent='Preset'; pr.appendChild(pl);
+  let ps=document.createElement('select'); for(const k of Object.keys(PRESETS)){ let o=document.createElement('option'); o.value=k; o.textContent=PRESETS[k].name; ps.appendChild(o); }
+  ps.value=activePreset; ps.onchange=()=>applyPreset(ps.value); pr.appendChild(ps); panel.appendChild(pr); ctrls._preset=ps;
+  for(const [group,items] of SCHEMA){
+    let h=document.createElement('div'); h.className='grp'; h.textContent=group; panel.appendChild(h);
+    for(const it of items){
+      let [key,label,type]=it, row=document.createElement('div'); row.className='row';
+      let lab=document.createElement('span'); lab.className='lab'; lab.textContent=label; row.appendChild(lab);
+      if(type==='range'){
+        let inp=document.createElement('input'); inp.type='range'; inp.min=it[3]; inp.max=it[4]; inp.step=it[5]; inp.value=L[key];
+        let val=document.createElement('span'); val.className='val'; val.textContent=L[key];
+        inp.oninput=()=>{ L[key]=parseFloat(inp.value); val.textContent=inp.value; mark(key); }; row.appendChild(inp); row.appendChild(val); ctrls[key]={inp,val};
+      } else if(type==='bool'){
+        let inp=document.createElement('input'); inp.type='checkbox'; inp.checked=!!L[key];
+        inp.oninput=()=>{ L[key]=inp.checked; mark(key); }; row.appendChild(inp); ctrls[key]={inp};
+      } else if(type==='color'){
+        let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(L[key]);
+        inp.oninput=()=>{ L[key]=hexToRgb(inp.value); mark(key); }; row.appendChild(inp); ctrls[key]={inp};
+      } else if(type==='select'){
+        let inp=document.createElement('select'); for(const [v,t] of it[3]){ let o=document.createElement('option'); o.value=v; o.textContent=t; inp.appendChild(o); }
+        inp.value=L[key]; inp.oninput=()=>{ L[key]=inp.value; mark(key); }; row.appendChild(inp); ctrls[key]={inp};
+      }
+      panel.appendChild(row);
+    }
+  }
+  let hint=document.createElement('div'); hint.className='hint';
+  hint.textContent='Systems link by the chosen Strategy; short=official, long=unofficial (drawn separately, can be Beamless like galaxy_01 smugglers). Multicolor + Two-way + Gradient ends reproduces the galaxy_01 look; By-type blue/red is the IE economy look.';
+  panel.appendChild(hint);
+}
+function mark(key){ if(GEN_KEYS.has(key)) needsGen=true; else if(LANE_KEYS.has(key)) needsLanes=true; else if(PATH_KEYS.has(key)) needsPath=true; }
+function refreshPanel(){ for(const key in ctrls){ if(key==='_preset'){ ctrls._preset.value=activePreset; continue; } let c=ctrls[key], v=L[key];
+  if(c.inp.type==='checkbox') c.inp.checked=!!v; else if(c.inp.type==='color') c.inp.value=rgbToHex(v); else { c.inp.value=v; if(c.val) c.val.textContent=v; } } }
+function applyPreset(name){ if(!PRESETS[name]) return; activePreset=name; Object.assign(L, JSON.parse(JSON.stringify(PRESETS[name].ov))); needsGen=true; refreshPanel(); }
+function reseed(){ L.seed=Math.floor(Math.random()*9999); needsGen=true; refreshPanel(); }
+window.addEventListener('load',()=>{ document.getElementById('build-pill').textContent=BUILD_ID; document.getElementById('reseed-btn').onclick=reseed; });
+</script>
+</body></html>
