@@ -64,7 +64,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '35';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '36';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -195,6 +195,7 @@ function draw(){
   if (viewMode === 'galaxy') drawGalaxyView();
   else if (activePage === 'backdrop') drawBackdropPreview();   // isolated backdrop compilation (no sun/stars)
   else if (activePage === 'stars') drawStarsPreview();         // isolated starfield compilation
+  else if (activePage === 'lanes') drawLanesPreview();         // isolated lane network (nodes + beams, fit)
   else drawSunPreview();
   updateFps();
   if(millis()-lastSaveCheck>1500){ lastSaveCheck=millis(); autoSave(); }        // debounced auto-persist to localStorage
@@ -273,6 +274,19 @@ function drawStarsPreview(){
   drawStars(0,0,1);                                         // flat, un-parallaxed preview
   blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
   text('starfield preview · '+CFG.stars.layers.filter(L=>L.on).length+' of '+CFG.stars.layers.length+' layers · parallax shows in VIEW GALAXY (pan/zoom)', PANELW+(width-PANELW)/2, height-16);
+}
+function drawLanesPreview(){                                // isolated lane network: nodes + beams fit to the play area (no backdrop/stars)
+  background(3,4,9);
+  let px=(PANELW+width)/2, py=height/2, playW=width-PANELW;
+  if(!galaxy.length){ blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER,CENTER); text('no systems — generate a galaxy first', px, py); return; }
+  let ext=1; for(const s of galaxy){ let ax=Math.abs(s.x), ay=Math.abs(s.y); if(ax>ext)ext=ax; if(ay>ext)ext=ay; }
+  let fit=Math.min(playW,height)*0.9/(2*ext);               // fit the node cloud into ~90% of the play area
+  drawLanes(0,0,fit);                                        // beams via a flat fit-camera (reuses the galaxy-view renderer)
+  noStroke();                                                // system nodes on top, as lane anchors
+  for(const s of galaxy){ let x=px+s.x*fit, y=py+s.y*fit, r=1.6+(s.tier-1)*1.4; fill(s.color[0],s.color[1],s.color[2],235); circle(x,y,r*2); }
+  blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
+  let msg = CFG.lanes.on ? (laneList.length+' lanes · '+galaxy.length+' systems') : ('lanes off · '+galaxy.length+' systems');
+  text('lanes preview · '+msg+' · pan/zoom + backdrop in VIEW GALAXY', px, height-16);
 }
 const SF_LAYER_CTRLS=[['on','On','bool'],['bake','Bake','bool'],['uniform','Uniform fill','bool'],['parallax','Parallax','range',0,1,0.01],['count','Count','range',0,5000,20],['radius','Radius','range',0.05,1.4,0.01],
   ['size','Size','range',0.3,6,0.1],['bright','Bright','range',0,1.5,0.01],['color','Color','range',0,1,0.01],['twinkle','Twinkle','range',0,1,0.01],
@@ -396,14 +410,15 @@ function lnDrawOne(L, ax,ay,bx,by, z){
     lnBeam(ax,ay,bx,by,-off, td, len, ux,uy,nx,ny, lnColor(L,1), st,w,op,glow,ef,cv);
   } else lnBeam(ax,ay,bx,by, 0, td, len, ux,uy,nx,ny, lnColor(L,0), st,w,op,glow,ef,cv);
 }
-function drawLanes(){
+function drawLanes(camX,camY,camZoom){
   let C=CFG.lanes; if(!C.on) return;
   if(lnNeedsBuild) lnBuild(); else if(lnNeedsPath) lnRegenPaths();
   lnBreathe = C.breathe ? (1 - C.breatheAmt*(0.5+0.5*Math.sin(millis()*0.001*C.breatheSpeed*2))) : 1;
-  let px=(PANELW+width)/2, py=height/2, z=cam.zoom, M=80;
+  let cx=(camX!==undefined)?camX:cam.x, cy=(camY!==undefined)?camY:cam.y, z=(camZoom!==undefined)?camZoom:cam.zoom;
+  let px=(PANELW+width)/2, py=height/2, M=80;
   push(); blendMode(ADD);
   for(const L of laneList){ let A=galaxy[L.a], B=galaxy[L.b];
-    let ax=px+(cam.x+A.x)*z, ay=py+(cam.y+A.y)*z, bx=px+(cam.x+B.x)*z, by=py+(cam.y+B.y)*z;
+    let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
     if((ax<PANELW-M&&bx<PANELW-M)||(ax>width+M&&bx>width+M)||(ay<-M&&by<-M)||(ay>height+M&&by>height+M)) continue;   // cull off-screen
     lnDrawOne(L, ax,ay,bx,by, z); }
   pop(); blendMode(BLEND); drawingContext.setLineDash([]);
