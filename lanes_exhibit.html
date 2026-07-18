@@ -30,7 +30,7 @@
 </div>
 <div id="panel"></div>
 <script>
-const BUILD_DATE='20260718', BUILD_SEQ='03', BUILD_ID='lane_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+const BUILD_DATE='20260718', BUILD_SEQ='04', BUILD_ID='lane_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
 const PANELW=256, TOPH=31;
 const TIER_COLS=[[185,205,235],[255,228,150],[255,150,115]];   // T1 white-blue, T2 gold, T3 orange
 const SPECTRAL=[[150,176,255],[200,214,255],[255,255,255],[255,246,214],[255,212,162],[255,168,128]];
@@ -51,7 +51,7 @@ let L = {
   // Path shape (winding lanes via midpoint displacement)
   pathMode:'straight', pathRough:0.18, pathDetail:4,
   // Dash + animation (lane-intrinsic, no ships)
-  dashLen:7, dashGap:7, flowDash:false, breathe:false, breatheSpeed:1.0, breatheAmt:0.4, animSpeed:1.0,
+  dashLen:7, dashGap:7, flowDash:false, flowOppose:true, breathe:false, breatheSpeed:1.0, breatheAmt:0.4, animSpeed:1.0,
   // Nodes
   nodeShow:true, nodeMode:'tier', nodeSize:3, nodeTierScale:1.6, nodeColor:[255,238,205], nodeGlow:2.5, nodeRing:false
 };
@@ -68,7 +68,7 @@ const SCHEMA=[
   ['Official lanes', [['offStyle','Style','select',OPT_STYLE],['offW','Width','range',0.3,6,0.1],['offOpacity','Opacity','range',0,1,0.01],['offGlow','Glow','range',0,5,0.1],['offTwoWay','Two-way','bool'],['offLaneGap','Lane gap','range',0,14,0.5],['offEndGap','Node gap','range',0,40,1],['offEndFade','End fade','range',0,0.49,0.01],['offCurve','Curve','range',-2,2,0.05]]],
   ['Unofficial lanes', [['unoBeamless','Beamless','bool'],['unoStyle','Style','select',OPT_STYLE],['unoTwoWay','Two-way','bool'],['unoW','Width','range',0.3,6,0.1],['unoOpacity','Opacity','range',0,1,0.01],['unoGlow','Glow','range',0,5,0.1],['unoLaneGap','Lane gap','range',0,14,0.5],['unoEndGap','Node gap','range',0,40,1],['unoEndFade','End fade','range',0,0.49,0.01],['unoCurve','Curve','range',-2,2,0.05]]],
   ['Path shape', [['pathMode','Path','select',OPT_PATH],['pathRough','Roughness','range',0,0.6,0.01],['pathDetail','Detail','range',1,6,1]]],
-  ['Dash & animation', [['dashLen','Dash len','range',1,30,1],['dashGap','Dash gap','range',1,30,1],['flowDash','Flow dashes','bool'],['breathe','Breathe','bool'],['breatheSpeed','Breathe spd','range',0.1,3,0.05],['breatheAmt','Breathe amt','range',0,1,0.01],['animSpeed','Anim speed','range',-3,3,0.05]]],
+  ['Dash & animation', [['dashLen','Dash len','range',1,30,1],['dashGap','Dash gap','range',1,30,1],['flowDash','Flow dashes','bool'],['flowOppose','2-way opposite','bool'],['breathe','Breathe','bool'],['breatheSpeed','Breathe spd','range',0.1,3,0.05],['breatheAmt','Breathe amt','range',0,1,0.01],['animSpeed','Anim speed','range',-3,3,0.05]]],
   ['Nodes', [['nodeShow','Show','bool'],['nodeMode','Mode','select',OPT_NODE],['nodeSize','Size','range',0.5,8,0.5],['nodeTierScale','Tier scale','range',1,3,0.1],['nodeColor','Color','color'],['nodeGlow','Glow','range',0,5,0.1],['nodeRing','Ring','bool']]]
 ];
 const PRESETS={
@@ -167,7 +167,7 @@ function drawBeam(ax,ay,bx,by, laneOff, td, col, st,w,op,glow,endFade,curve){
     else { for(let i=1;i<P.length-1;i++){ let hx=(P[i].x+P[i+1].x)/2, hy=(P[i].y+P[i+1].y)/2; dc.quadraticCurveTo(P[i].x,P[i].y,hx,hy); } dc.lineTo(P[P.length-1].x,P[P.length-1].y); }   // smooth river/road
   };
   if(st==='glow'){ dc.setLineDash([]); dc.strokeStyle=rgba(col,0.22*op); dc.lineWidth=Math.max(0.5,w*glow*2.2); build(); dc.stroke(); dc.strokeStyle=rgba(col,op); dc.lineWidth=w; build(); dc.stroke(); return; }
-  if(st==='dashed'){ dc.setLineDash([L.dashLen,L.dashGap]); if(L.flowDash) dc.lineDashOffset=-(millis()*0.001)*40*L.animSpeed; dc.strokeStyle=rgba(col,op); dc.lineWidth=w; build(); dc.stroke(); dc.setLineDash([]); dc.lineDashOffset=0; return; }
+  if(st==='dashed'){ dc.setLineDash([L.dashLen,L.dashGap]); if(L.flowDash){ let dir=(L.flowOppose && laneOff<0)?-1:1; dc.lineDashOffset=-dir*(millis()*0.001)*40*L.animSpeed; } dc.strokeStyle=rgba(col,op); dc.lineWidth=w; build(); dc.stroke(); dc.setLineDash([]); dc.lineDashOffset=0; return; }
   if(st==='solid'){ dc.setLineDash([]); dc.strokeStyle=rgba(col,op); dc.lineWidth=w; build(); dc.stroke(); return; }
   dc.setLineDash([]); let g=dc.createLinearGradient(ax,ay,bx,by), f=Math.max(0.001,Math.min(0.49,endFade));   // gradient soft ends
   g.addColorStop(0,rgba(col,0)); g.addColorStop(f,rgba(col,op)); g.addColorStop(1-f,rgba(col,op)); g.addColorStop(1,rgba(col,0));
