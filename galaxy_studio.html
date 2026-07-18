@@ -64,7 +64,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '42';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '43';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -100,9 +100,9 @@ let CFG = {
     // BASE FILL
     baseOn: true, baseColor: [6, 8, 16], baseOpacity: 1.0,
     // IMAGE (curated photo gallery in galaxy_backgrounds/)
-    imgOn: false, imgIndex: 3, imgHashPick: false, imgRot: 0, imgFlip: false, imgScale: 1.0, imgOpacity: 1.0,
+    imgOn: false, imgTrack: 'viewport', imgIndex: 3, imgHashPick: false, imgRot: 0, imgFlip: false, imgScale: 1.0, imgOpacity: 1.0,
     // NEBULA (procedural: domain-warp / fBm / emission noise field, or legacy blobs)
-    nebOn: true, nebType: 'domainwarp', nebColorA: [40, 30, 90], nebColorB: [120, 40, 110], nebColorC: [245, 215, 185],
+    nebOn: true, nebTrack: 'viewport', nebType: 'domainwarp', nebColorA: [40, 30, 90], nebColorB: [120, 40, 110], nebColorC: [245, 215, 185],
     nebScale: 1.0, nebOctaves: 5, nebWarp: 1.2, nebContrast: 1.4, nebThreshold: 0.15, nebOpacity: 1.2, nebCount: 42, nebSeed: 7,
     nebAnimOn: true, nebInterval: 5, nebStep: 0.05, nebBlend: 1.5,             // hold N s, then crossfade one step over nebBlend s
     // GRID OVERLAY
@@ -849,7 +849,7 @@ function drawBackdrop(parallax){                                              //
       let b=bdBuf[L];
       if(bdDirty || !b || b.width!==res || (L==='neb' && nebFading)) b=bakeBdLayer(L, E, res);   // re-bake neb each frame during the crossfade
       let bs=2*E;
-      if(parallax && B.bdFill && (L==='base'||L==='img'||L==='neb')){ let need=Math.max(width-PANELW,height)/Math.max(lz,1e-4)*(B.bdFillMargin||1); if(need>bs) bs=need; }   // scale the fill layers to cover the viewport (no dark edges)
+      if(parallax && B.bdFill && (L==='base'||L==='img'||L==='neb') && !((L==='img'||L==='neb') && B[L+'Track']==='map')){ let need=Math.max(width-PANELW,height)/Math.max(lz,1e-4)*(B.bdFillMargin||1); if(need>bs) bs=need; }   // fill to cover the viewport, unless this layer is tied to the map (galaxy-anchored square)
       push(); if(BD_BLEND[L]==='add') blendMode(ADD); imageMode(CENTER); image(b, 0,0, bs, bs); pop();
     } else {                                                                  // live: draw directly, at its position in the stack
       drawOneBdLayer(window, E, L);
@@ -1126,12 +1126,12 @@ const BACKDROP_SCHEMA = [
   ['Global', [['cover','Cover ×radius','range',0.5,8,0.1],['bdFill','Fill viewport','bool'],['bdFillMargin','Fill over','range',1,2.5,0.05],['bakeRes','Bake res','range',256,2048,128]]],
   ['Base fill', [['baseOn','Base','bool'],['baseColor','Color','color'],['baseOpacity','Opacity','range',0,1,0.01]]],
   ['Image', [['imgOn','Image','bool'],['imgIndex','Which','select',BD_IMG_OPTS],['imgHashPick','Hash pick','bool'],
-    ['imgRot','Rotate ×90°','range',0,3,1],['imgFlip','Mirror','bool'],['imgScale','Scale','range',0.3,3,0.05],['imgOpacity','Opacity','range',0,1,0.01]]],
+    ['imgRot','Rotate ×90°','range',0,3,1],['imgFlip','Mirror','bool'],['imgScale','Scale','range',0.3,3,0.05],['imgOpacity','Opacity','range',0,1,0.01],['imgTrack','Track','select',[['viewport','Viewport'],['map','Map (galaxy)']]]]],
   ['Nebula', [['nebOn','Nebula','bool'],['nebType','Type','select',NEB_TYPE_OPTS],
     ['nebColorA','Color A','color'],['nebColorB','Color B','color'],['nebColorC','Color C','color'],
     ['nebScale','Scale','range',0.2,4,0.05],['nebOctaves','Octaves','range',1,7,1],['nebWarp','Warp amt','range',0,3,0.05],
     ['nebContrast','Contrast','range',0.4,3,0.05],['nebThreshold','Threshold','range',0,0.8,0.01],['nebOpacity','Intensity','range',0,2,0.01],
-    ['nebCount','Blob count','range',0,120,1],['nebSeed','Seed','range',1,999,1]]],
+    ['nebCount','Blob count','range',0,120,1],['nebSeed','Seed','range',1,999,1],['nebTrack','Track','select',[['viewport','Viewport'],['map','Map (galaxy)']]]]],
   ['Nebula motion', [['nebAnimOn','Step over time','bool'],['nebInterval','Interval (s)','range',1,30,0.5],['nebStep','Step size','range',0.005,0.3,0.005],['nebBlend','Blend (s)','range',0,5,0.1]]],
   ['Grid overlay', [['gridOn','Grid','bool'],['gridColor','Color','color'],['gridOpacity','Opacity','range',0,1,0.01],
     ['gridSpacing','Spacing','range',50,600,10],['gridWeight','Line weight','range',0.5,4,0.5]]],
