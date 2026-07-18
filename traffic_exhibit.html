@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Traffic Exhibit</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#05060a;font-family:'Consolas','Monaco',monospace;}
+  #topbar{position:fixed;top:0;left:0;right:0;height:31px;display:flex;align-items:center;gap:8px;padding:0 10px;
+    background:rgba(6,10,16,0.96);border-bottom:1px solid #2a4a58;z-index:20;box-sizing:border-box;}
+  #topbar .ttl{color:#9fd8e0;font-weight:bold;letter-spacing:1px;font-size:12px;}
+  .pill{background:#163b34;color:#9fe8d8;border:1px solid #3a8c7a;border-radius:9px;padding:1px 9px;font:10px 'Consolas',monospace;font-weight:bold;letter-spacing:.5px;}
+  #topbar button{background:#163b34;color:#cdefe6;border:1px solid #3a8c7a;font:11px 'Consolas',monospace;padding:3px 10px;cursor:pointer;}
+  #topbar button:hover{background:#1e4d43;}
+  #stat{margin-left:auto;color:#8fe0c8;font:11px 'Consolas',monospace;}
+  #panel{position:fixed;top:31px;left:0;width:250px;max-height:calc(100vh - 31px);overflow-y:auto;
+    background:rgba(8,16,18,0.92);border-right:1px solid #2a4a58;padding:8px 10px 40px;
+    color:#b9e0dc;font:11px 'Consolas',monospace;z-index:10;box-sizing:border-box;}
+  #panel .grp{color:#8fd8c8;font-weight:bold;letter-spacing:.5px;margin:10px 0 4px;border-bottom:1px solid #223a40;padding-bottom:2px;}
+  #panel .row{display:flex;align-items:center;gap:6px;margin:3px 0;}
+  #panel .lab{width:78px;flex:none;color:#9bc4bc;}
+  #panel .row input[type=range]{flex:1;min-width:0;}
+  #panel .row select{flex:1;min-width:0;background:#0c1a18;color:#cdefe6;border:1px solid #2a4a48;font:11px 'Consolas',monospace;}
+  #panel .val{width:34px;text-align:right;color:#c8f0e6;}
+  #panel .hint{color:#60887e;margin-top:8px;line-height:1.4;}
+</style>
+</head><body>
+<div id="topbar">
+  <span class="ttl">TRAFFIC EXHIBIT</span>
+  <span class="pill" id="build-pill">traf_v0.1</span>
+  <button id="play-btn">&#9632; Freeze all</button>
+  <button id="reseed-btn">Reseed</button>
+  <span id="stat">&mdash;</span>
+</div>
+<div id="panel"></div>
+<script>
+const BUILD_DATE='20260718', BUILD_SEQ='06', BUILD_ID='traf_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+const PANELW=250, TOPH=31, GAP=10;
+
+// ---------- global params (shared across all 9 cells for an apples-to-apples compare) ----------
+let T = { laneMode:'two', colorMode:'multi', singleColor:[120,200,255], count:14, speed:1.0, shipSize:1.0, spread:1.0, nodeSize:1.0, bg:[5,7,12] };
+const SCHEMA = [
+  ['Lane selector', [['laneMode','Direction','select',[['single','Single (1-way)'],['two','Two-way']]],
+    ['colorMode','Color','select',[['multi','Multicolor'],['single','Single color'],['lanematch','Lane matching']]],
+    ['singleColor','Single col','color'],['spread','Lane gap','range',0,3,0.05]]],
+  ['Traffic', [['count','Ships','range',1,40,1],['speed','Speed','range',0,3,0.05],['shipSize','Ship size','range',0.3,3,0.05]]],
+  ['Scene', [['nodeSize','Node size','range',0.3,3,0.1],['bg','Background','color']]]
+];
+const PALETTE=[[120,200,255],[255,180,90],[130,240,170],[255,120,160],[180,150,255],[255,235,140],[120,255,235]];
+
+// ---------- seeded RNG + ship data ----------
+let _rs=1; function rseed(n){ _rs=(n>>>0)||1; } function rand(){ _rs=(_rs*1664525+1013904223)>>>0; return _rs/4294967296; }
+let ships=[], cellTime=new Array(9).fill(0), cellPlay=new Array(9).fill(true), reseedN=99, expanded=-1, laneGapPx=5;
+const COMBO_CELL=4;                                        // cell 5 (0-indexed 4) is the configurable overlay
+function makeShips(count, seed){ let arr=[], rs=(seed>>>0)||1, rnd=()=>{ rs=(rs*1664525+1013904223)>>>0; return rs/4294967296; };
+  for(let i=0;i<(count|0);i++) arr.push({ i, base:rnd(), spd:0.7+rnd()*0.7, sz:0.6+rnd()*0.9, ci:Math.floor(rnd()*PALETTE.length), crim:rnd()<0.22 }); return arr; }
+function regenShips(){ ships = makeShips(T.count, reseedN); }
+// combo (cell 5): overlay N traffic layers, each independently configured (dir/color/ships/speed/size)
+let comboLayers=[], nextLayerSeed=1;
+function layerSeed(L){ return (reseedN ^ (L.seed*2654435761))>>>0; }
+function newLayer(style,laneMode,colorMode,count,speed,shipSize,col){
+  let L={ style, on:true, laneMode, colorMode, singleColor:col||[120,200,255], count, speed, shipSize, seed:nextLayerSeed++, time:0, ships:[] };
+  L.ships=makeShips(L.count, layerSeed(L)); return L; }
+function regenLayerShips(){ for(const L of comboLayers) L.ships=makeShips(L.count, layerSeed(L)); }
+function initCombo(){ comboLayers=[ newLayer(0,'two','multi',10,1.0,1.0), newLayer(3,'single','single',6,1.6,1.4,[255,225,150]) ]; }
+function laneDir(s){ if(T.laneMode!=='two') return {lane:0,dir:1}; let lane=s.i%2; return {lane, dir: lane===0?1:-1}; }
+function posOf(i,s,A,B, fracOverride){
+  let {lane,dir}=laneDir(s), frac;
+  if(fracOverride!==undefined) frac=((fracOverride%1)+1)%1;
+  else { let p=((s.base + cellTime[i]*s.spd)%1+1)%1; frac = dir>0? p : 1-p; }
+  let dx=B.x-A.x, dy=B.y-A.y, len=Math.hypot(dx,dy)||1, nx=-dy/len, ny=dx/len;
+  let g=(T.laneMode==='two')?(lane===0?laneGapPx:-laneGapPx):0;
+  return { x:A.x+dx*frac+nx*g, y:A.y+dy*frac+ny*g, ang:Math.atan2(dy*dir,dx*dir), frac, dir, lane, u:{x:dx/len,y:dy/len}, n:{x:nx,y:ny} };
+}
+
+// ---------- draw helpers ----------
+function rgba(c,a){ return 'rgba('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+a+')'; }
+function dot(x,y,r,col,a){ let dc=drawingContext; dc.fillStyle=rgba(col,a); dc.beginPath(); dc.arc(x,y,r,0,Math.PI*2); dc.fill(); }
+function glow(x,y,r,col,a){ let dc=drawingContext, g=dc.createRadialGradient(x,y,0,x,y,r); g.addColorStop(0,rgba(col,a)); g.addColorStop(1,rgba(col,0)); dc.fillStyle=g; dc.beginPath(); dc.arc(x,y,r,0,Math.PI*2); dc.fill(); }
+function seg(a,b,col,w,al){ let dc=drawingContext; dc.strokeStyle=rgba(col,al); dc.lineWidth=w; dc.lineCap='round'; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
+function gradBeam(a,b,col,w,al){ let dc=drawingContext, g=dc.createLinearGradient(a.x,a.y,b.x,b.y); g.addColorStop(0,rgba(col,0)); g.addColorStop(0.5,rgba(col,al)); g.addColorStop(1,rgba(col,0)); dc.strokeStyle=g; dc.lineWidth=w; dc.lineCap='round'; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
+function triShip(x,y,ang,r,col){ let dc=drawingContext; dc.save(); dc.translate(x,y); dc.rotate(ang); dc.fillStyle=rgba(col,0.95); dc.beginPath(); dc.moveTo(r,0); dc.lineTo(-r*0.72,r*0.62); dc.lineTo(-r*0.72,-r*0.62); dc.closePath(); dc.fill(); dc.restore(); }
+function drawNode(x,y){ let r=3.2*T.nodeSize; glow(x,y,r*2.6,[200,215,255],0.35); dot(x,y,r,[232,240,255],0.95); }
+function eachLane(A,B, cb){ let dx=B.x-A.x,dy=B.y-A.y,len=Math.hypot(dx,dy)||1,nx=-dy/len,ny=dx/len;
+  if(T.laneMode==='two'){ let g=laneGapPx;
+    cb({x:A.x+nx*g,y:A.y+ny*g},{x:B.x+nx*g,y:B.y+ny*g},0,1);
+    cb({x:A.x-nx*g,y:A.y-ny*g},{x:B.x-nx*g,y:B.y-ny*g},1,-1);
+  } else cb(A,B,0,1); }
+function laneColor(li){ return T.colorMode==='single'? T.singleColor : PALETTE[li%PALETTE.length]; }   // multi & lanematch use the per-lane palette
+function shipCol(s){ if(T.colorMode==='single') return T.singleColor; if(T.colorMode==='lanematch') return laneColor(laneDir(s).lane); return PALETTE[s.ci]; }
+
+// ---------- traffic renderers (usable standalone AND as combo overlays) ----------
+function rGalaxy01(A,B,i){ eachLane(A,B,(a,b,li)=>gradBeam(a,b,laneColor(li),2.4,0.7));       // multicolor two-way beams + ship dots
+  for(const s of ships){ let p=posOf(i,s,A,B), c=shipCol(s); glow(p.x,p.y,6*T.shipSize,c,0.45); dot(p.x,p.y,2.2*T.shipSize,c,0.95); } }
+function rEconomy(A,B,i){ eachLane(A,B,(a,b)=>seg(a,b,[70,90,140],1.4,0.5));                  // commercial(blue)/criminal(red)
+  for(const s of ships){ let p=posOf(i,s,A,B), c=s.crim?[255,72,72]:[92,162,255]; glow(p.x,p.y,5*T.shipSize,c,0.4); dot(p.x,p.y,2*T.shipSize,c,0.96); } }
+function rComet(A,B,i){ eachLane(A,B,(a,b)=>seg(a,b,[40,55,80],1,0.4));
+  for(const s of ships){ let p=posOf(i,s,A,B), c=shipCol(s), tl=15*T.shipSize, tx=p.x-p.u.x*p.dir*tl, ty=p.y-p.u.y*p.dir*tl, dc=drawingContext, g=dc.createLinearGradient(tx,ty,p.x,p.y);
+    g.addColorStop(0,rgba(c,0)); g.addColorStop(1,rgba(c,0.6)); dc.strokeStyle=g; dc.lineWidth=2*T.shipSize; dc.lineCap='round'; dc.beginPath(); dc.moveTo(tx,ty); dc.lineTo(p.x,p.y); dc.stroke();
+    dot(p.x,p.y,1.9*T.shipSize,[255,255,255],0.9); glow(p.x,p.y,6*T.shipSize,c,0.5); } }
+function rPulses(A,B,i){ eachLane(A,B,(a,b)=>seg(a,b,[40,60,90],1,0.35));
+  for(const s of ships){ let p=posOf(i,s,A,B), c=shipCol(s), pulse=0.5+0.5*Math.sin(p.frac*Math.PI*4); glow(p.x,p.y,(7+6*pulse)*T.shipSize,c,0.6); dot(p.x,p.y,1.8*T.shipSize,[255,255,255],0.85); } }
+function rTriangle(A,B,i){ eachLane(A,B,(a,b)=>seg(a,b,[50,65,95],1.2,0.45));
+  for(const s of ships){ let p=posOf(i,s,A,B); triShip(p.x,p.y,p.ang,4.6*T.shipSize,shipCol(s)); } }
+function rParticle(A,B,i){ eachLane(A,B,(a,b)=>seg(a,b,[35,50,75],0.8,0.3));
+  for(const s of ships){ let c=shipCol(s), p=posOf(i,s,A,B); dot(p.x,p.y,1.2*T.shipSize,c,0.8); let p2=posOf(i,{...s,base:(s.base+0.5)%1},A,B); dot(p2.x,p2.y,1.0*T.shipSize,c,0.5); } }
+function rOrbs(A,B,i){ eachLane(A,B,(a,b)=>seg(a,b,[45,60,90],1,0.35));
+  for(const s of ships){ let p=posOf(i,s,A,B), c=shipCol(s); glow(p.x,p.y,10*T.shipSize*(0.7+0.5*s.sz),c,0.5); dot(p.x,p.y,2*T.shipSize,c,0.85); } }
+function rConvoy(A,B,i){ eachLane(A,B,(a,b)=>seg(a,b,[50,65,95],1.2,0.45));
+  let G=3; for(const s of ships){ let grp=s.i%G, ld=laneDir(s), center=((grp/G)+cellTime[i]*0.55)%1, within=(Math.floor(s.i/G))*0.05;
+    let fr=center+within; if(ld.dir<0) fr=1-fr; let p=posOf(i,s,A,B,fr), c=shipCol(s); glow(p.x,p.y,5*T.shipSize,c,0.35); dot(p.x,p.y,2*T.shipSize,c,0.9); } }
+function renderCombo(A,B,i){                                                                   // overlay the selected layers, each with its own settings
+  let sM=T.laneMode,sC=T.colorMode,sS=T.singleColor,sZ=T.shipSize,sShips=ships,sT=cellTime[i]; // save globals, swap per layer, restore
+  for(const L of comboLayers){ if(!L.on || !OVERLAYS[L.style]) continue;
+    T.laneMode=L.laneMode; T.colorMode=L.colorMode; T.singleColor=L.singleColor; T.shipSize=L.shipSize; ships=L.ships; cellTime[i]=L.time;
+    OVERLAYS[L.style].fn(A,B,i); }
+  T.laneMode=sM; T.colorMode=sC; T.singleColor=sS; T.shipSize=sZ; ships=sShips; cellTime[i]=sT;
+}
+const OVERLAYS=[   // the primitives selectable inside the combo cell
+  {name:'Civilian beams', fn:rGalaxy01},{name:'Commercial/criminal', fn:rEconomy},{name:'Comet trails', fn:rComet},{name:'Light pulses', fn:rPulses},
+  {name:'Triangle ships', fn:rTriangle},{name:'Particle stream', fn:rParticle},{name:'Glow orbs', fn:rOrbs},{name:'Convoy groups', fn:rConvoy}
+];
+const STYLES=[     // the 9 grid cells (cell 5 = configurable combo)
+  {name:'galaxy_01 civilian', fn:rGalaxy01},{name:'interstellar_economy', fn:rEconomy},{name:'Comet trails', fn:rComet},{name:'Light pulses', fn:rPulses},
+  {name:'Combo overlay', fn:renderCombo},{name:'Particle stream', fn:rParticle},{name:'Glow orbs', fn:rOrbs},{name:'Triangle ships', fn:rTriangle},{name:'Convoy groups', fn:rConvoy}
+];
+
+// ---------- layout + draw ----------
+function cellRect(i){ let availW=width-PANELW-GAP*4, availH=height-TOPH-GAP*4, cs=Math.min(availW/3, availH/3);
+  let r=Math.floor(i/3), c=i%3; return { x:PANELW+GAP*2 + c*(cs+GAP), y:TOPH+GAP*2 + r*(cs+GAP), cs }; }
+function nodesFor(R){ return [{x:R.x+R.cs*0.15,y:R.y+R.cs*0.52},{x:R.x+R.cs*0.85,y:R.y+R.cs*0.52}]; }
+function setup(){ pixelDensity(1); createCanvas(windowWidth, windowHeight); regenShips(); initCombo(); buildPanel(); }
+function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
+function renderCell(R, i){
+  let dc=drawingContext; dc.save(); dc.beginPath(); dc.rect(R.x,R.y,R.cs,R.cs); dc.clip();
+  noStroke(); fill(T.bg[0]+4,T.bg[1]+5,T.bg[2]+8); rect(R.x,R.y,R.cs,R.cs);
+  laneGapPx = R.cs*0.028*T.spread;
+  let [A,Bn]=nodesFor(R); STYLES[i].fn(A,Bn,i); drawNode(A.x,A.y); drawNode(Bn.x,Bn.y);
+  dc.restore();
+}
+function draw(){
+  for(let i=0;i<9;i++){ if(!cellPlay[i]) continue;
+    if(i===COMBO_CELL){ for(const L of comboLayers) if(L.on) L.time += L.speed*0.012; }   // each combo overlay runs at its own speed
+    else cellTime[i] += T.speed*0.012; }
+  background(T.bg[0],T.bg[1],T.bg[2]);
+  if(expanded>=0){
+    let s=Math.min(width-PANELW-GAP*4, height-TOPH-GAP*4), x=PANELW+(width-PANELW-s)/2, y=TOPH+(height-TOPH-s)/2;
+    renderCell({x,y,cs:s}, expanded);
+    noStroke(); fill(0,0,0,160); rect(x,y+s-24,s,24); fill(220,240,235); textSize(13); textAlign(LEFT,CENTER);
+    text((expanded+1)+'. '+STYLES[expanded].name+'   — click to close', x+8, y+s-12);
+    noFill(); stroke(60,120,110); rect(x,y,s,s); updateTop(); return;
+  }
+  for(let i=0;i<9;i++){ let R=cellRect(i); renderCell(R,i);
+    noStroke(); fill(0,0,0,150); rect(R.x, R.y+R.cs-16, R.cs, 16);
+    fill(200,232,224); textSize(11); textAlign(LEFT,CENTER); text((i+1)+'. '+STYLES[i].name, R.x+6, R.y+R.cs-8);
+    noStroke();                                                 // per-cell play toggle dot (top-left)
+    if(cellPlay[i]){ fill(90,225,175); circle(R.x+12,R.y+12,13); }
+    else { fill(30,48,44); circle(R.x+12,R.y+12,13); noFill(); stroke(110,150,142); strokeWeight(1); circle(R.x+12,R.y+12,13); }
+    noFill(); stroke(cellPlay[i]?color(60,120,98):color(38,60,56)); strokeWeight(1); rect(R.x,R.y,R.cs,R.cs);
+  }
+  updateTop();
+}
+function updateTop(){ let anyPlay=cellPlay.some(Boolean);
+  document.getElementById('stat').textContent = (anyPlay?('▶ '+Math.round(frameRate())+' fps'):'frozen')+' · '+ships.length+' ships/cell · '+BUILD_ID;
+  document.getElementById('play-btn').innerHTML = anyPlay ? '&#9632; Freeze all' : '&#9654; Play all';
+}
+function mousePressed(){
+  if(mouseX<PANELW || mouseY<TOPH) return;
+  if(expanded>=0){ expanded=-1; return; }
+  for(let i=0;i<9;i++){ let R=cellRect(i);
+    if(mouseX>=R.x&&mouseX<=R.x+R.cs&&mouseY>=R.y&&mouseY<=R.y+R.cs){
+      if(mouseX<=R.x+26 && mouseY<=R.y+24){ cellPlay[i]=!cellPlay[i]; return; }   // corner dot -> play/freeze this cell
+      expanded=i; return;                                                          // body -> inspect large
+    } } }
+
+// ---------- controls ----------
+function rgbToHex(c){ return '#'+[0,1,2].map(i=>('0'+(c[i]|0).toString(16)).slice(-2)).join(''); }
+function hexToRgb(h){ return [parseInt(h.substr(1,2),16),parseInt(h.substr(3,2),16),parseInt(h.substr(5,2),16)]; }
+let ctrls={};
+function buildPanel(){
+  let panel=document.getElementById('panel'); panel.innerHTML=''; ctrls={};
+  for(const [group,items] of SCHEMA){
+    let h=document.createElement('div'); h.className='grp'; h.textContent=group; panel.appendChild(h);
+    for(const it of items){
+      let [key,label,type]=it, row=document.createElement('div'); row.className='row';
+      let lab=document.createElement('span'); lab.className='lab'; lab.textContent=label; row.appendChild(lab);
+      if(type==='range'){
+        let inp=document.createElement('input'); inp.type='range'; inp.min=it[3]; inp.max=it[4]; inp.step=it[5]; inp.value=T[key];
+        let val=document.createElement('span'); val.className='val'; val.textContent=T[key];
+        inp.oninput=()=>{ T[key]=parseFloat(inp.value); val.textContent=inp.value; if(key==='count') regenShips(); };
+        row.appendChild(inp); row.appendChild(val); ctrls[key]={inp,val};
+      } else if(type==='color'){
+        let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(T[key]);
+        inp.oninput=()=>{ T[key]=hexToRgb(inp.value); }; row.appendChild(inp); ctrls[key]={inp};
+      } else if(type==='select'){
+        let inp=document.createElement('select'); for(const [v,l] of it[3]){ let o=document.createElement('option'); o.value=v; o.textContent=l; inp.appendChild(o); }
+        inp.value=T[key]; inp.onchange=()=>{ T[key]=inp.value; }; row.appendChild(inp); ctrls[key]={inp};
+      }
+      panel.appendChild(row);
+    }
+  }
+  buildComboUI(panel);
+  let hint=document.createElement('div'); hint.className='hint';
+  hint.textContent='Same two-node lane + traffic in 9 styles. Cells 1–2 replicate galaxy_01 (multicolor civilian) and interstellar_economy (blue/red). Cell 5 is a combo: stack any overlays, each with its own direction/color/ships/speed/size. Corner dot = play/freeze; click a cell body to inspect large.';
+  panel.appendChild(hint);
+}
+function mkRow(label,w){ let r=document.createElement('div'); r.className='row'; let l=document.createElement('span'); l.className='lab'; l.style.width=(w||44)+'px'; l.textContent=label; r.appendChild(l); return r; }
+function miniSelect(label,vals,labs,cur,onc){ let r=mkRow(label); let s=document.createElement('select'); s.style.flex='1'; vals.forEach((v,k)=>{let o=document.createElement('option');o.value=v;o.textContent=labs[k];s.appendChild(o);}); s.value=cur; s.onchange=()=>onc(s.value); r.appendChild(s); return r; }
+function miniColor(label,cur,onc){ let r=mkRow(label); let c=document.createElement('input'); c.type='color'; c.value=rgbToHex(cur); c.oninput=()=>onc(hexToRgb(c.value)); r.appendChild(c); return r; }
+function miniRange(label,mn,mx,st,cur,onc){ let r=mkRow(label); let inp=document.createElement('input'); inp.type='range'; inp.min=mn;inp.max=mx;inp.step=st;inp.value=cur; let v=document.createElement('span'); v.className='val'; v.textContent=cur; inp.oninput=()=>{ v.textContent=inp.value; onc(parseFloat(inp.value)); }; r.appendChild(inp); r.appendChild(v); return r; }
+function buildComboUI(panel){
+  let h=document.createElement('div'); h.className='grp'; h.textContent='Cell 5 — combo overlays'; panel.appendChild(h);
+  comboLayers.forEach((L,idx)=>{
+    let box=document.createElement('div'); box.style.cssText='border:1px solid #244a44;border-radius:4px;padding:3px 5px;margin:4px 0;background:rgba(18,38,34,0.5);';
+    let hr=document.createElement('div'); hr.className='row';
+    let on=document.createElement('input'); on.type='checkbox'; on.checked=L.on; on.style.flex='none'; on.title='enable'; on.onchange=()=>L.on=on.checked;
+    let sel=document.createElement('select'); sel.style.flex='1'; OVERLAYS.forEach((o,k)=>{let op=document.createElement('option');op.value=k;op.textContent=o.name;sel.appendChild(op);}); sel.value=L.style; sel.onchange=()=>L.style=parseInt(sel.value);
+    let rm=document.createElement('button'); rm.textContent='×'; rm.style.cssText='background:#3a2222;color:#e8b0b0;border:1px solid #6a3a3a;cursor:pointer;padding:0 7px;flex:none;'; rm.onclick=()=>{ comboLayers.splice(idx,1); buildPanel(); };
+    hr.appendChild(on); hr.appendChild(sel); hr.appendChild(rm); box.appendChild(hr);
+    box.appendChild(miniSelect('Dir',['single','two'],['Single','Two-way'],L.laneMode,v=>L.laneMode=v));
+    box.appendChild(miniSelect('Color',['multi','single','lanematch'],['Multi','Single','Lane'],L.colorMode,v=>L.colorMode=v));
+    box.appendChild(miniColor('Col',L.singleColor,c=>L.singleColor=c));
+    box.appendChild(miniRange('Ships',1,40,1,L.count,v=>{ L.count=v|0; L.ships=makeShips(L.count,layerSeed(L)); }));
+    box.appendChild(miniRange('Speed',0,3,0.05,L.speed,v=>L.speed=v));
+    box.appendChild(miniRange('Size',0.3,3,0.05,L.shipSize,v=>L.shipSize=v));
+    panel.appendChild(box);
+  });
+  let add=document.createElement('button'); add.textContent='+ add overlay'; add.style.cssText='width:100%;background:#173a34;color:#cdefe6;border:1px solid #3a8c7a;font:11px Consolas,monospace;padding:4px;margin-top:2px;cursor:pointer;'; add.onclick=()=>{ comboLayers.push(newLayer(3,'single','multi',6,1.2,1.0)); buildPanel(); }; panel.appendChild(add);
+}
+function reseed(){ reseedN=Math.floor(Math.random()*99999)+1; regenShips(); regenLayerShips(); }
+function togglePlay(){ let target=!cellPlay.some(Boolean); for(let i=0;i<9;i++) cellPlay[i]=target; }
+window.addEventListener('load',()=>{ document.getElementById('build-pill').textContent=BUILD_ID; document.getElementById('reseed-btn').onclick=reseed; document.getElementById('play-btn').onclick=togglePlay; });
+</script>
+</body></html>
