@@ -48,6 +48,8 @@
   <span id="build-pill">&mdash;</span>
   <button id="mode-btn">&#9654; VIEW GALAXY</button>
   <span id="fps-pill" title="click for FPS records">FPS &mdash;</span>
+  <input id="export-name" type="text" value="galaxy_cfg.json" title="Export filename" spellcheck="false"
+    style="width:120px;background:#0c1018;color:#cdd6e4;border:1px solid #2a3550;border-radius:4px;font:inherit;font-size:11px;padding:2px 5px;">
   <button id="export-btn">Export</button>
   <button id="import-btn">Import</button>
   <input type="file" id="import-file" accept=".json" style="display:none">
@@ -62,7 +64,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '31';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '35';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -128,12 +130,16 @@ let CFG = {
     // connections (nodes = the galaxy systems; tiers = their s.tier)
     connMode:'knn', officialDist:300, tierLinkBase:2, tierLinkMult:1,
     unoOn:true, unofficialMult:2.0, unofficialLinks:1, unoBeamless:true,
-    // color
-    colorMode:'multi', offColor:[120,200,255], unoColor:[255,90,90],
+    // transport (trunk) lanes between hub systems (tier >= transTier)
+    transOn:false, transTier:2, transLinks:2, transRange:2.6, transBeamless:false,
+    // color (per lane type; used by the "By type" color mode)
+    offColorMode:'multi', unoColorMode:'single', transColorMode:'single', offColor:[120,200,255], unoColor:[255,90,90], transColor:[255,180,80],
     // official beam style
     offStyle:'gradient', offW:1.8, offOpacity:0.85, offGlow:2.2, offTwoWay:true, offLaneGap:4, offEndGap:14, offEndFade:0.15, offCurve:0,
     // unofficial beam style
     unoStyle:'dashed', unoTwoWay:false, unoW:1.0, unoOpacity:0.4, unoGlow:1.4, unoLaneGap:3, unoEndGap:14, unoEndFade:0.15, unoCurve:0,
+    // transport (trunk) beam style
+    transStyle:'glow', transW:2.8, transOpacity:0.8, transGlow:3, transTwoWay:true, transLaneGap:5, transEndGap:14, transEndFade:0.12, transCurve:0,
     // path shape + animation
     pathMode:'straight', pathRough:0.18, pathDetail:4,
     dashLen:7, dashGap:7, flowDash:false, flowOppose:true, breathe:false, breatheSpeed:1, breatheAmt:0.4, animSpeed:1
@@ -322,15 +328,22 @@ function lnGabriel(cap){ let e=[], c2=cap*cap; for(let i=0;i<galaxy.length;i++)f
   let mx=(galaxy[i].x+galaxy[j].x)/2, my=(galaxy[i].y+galaxy[j].y)/2, r2=d2/4, ok=true;
   for(let k=0;k<galaxy.length;k++){ if(k===i||k===j)continue; let dx=galaxy[k].x-mx, dy=galaxy[k].y-my; if(dx*dx+dy*dy<r2){ok=false;break;} }
   if(ok) e.push([i,j]); } return e; }
-function lnMk(a,b,official){ let h=((a*131+b*977+(CFG.gen.seed|0)*7)>>>0), nx=()=>{ h=(h*1664525+1013904223)>>>0; return h/4294967296; };
-  return { a,b,official, col:[50+(nx()*205|0),50+(nx()*205|0),50+(nx()*205|0)], col2:[50+(nx()*205|0),50+(nx()*205|0),50+(nx()*205|0)], r:nx() }; }
+function lnMk(a,b,kind){ let h=((a*131+b*977+(CFG.gen.seed|0)*7)>>>0), nx=()=>{ h=(h*1664525+1013904223)>>>0; return h/4294967296; };
+  return { a,b,kind, col:[50+(nx()*205|0),50+(nx()*205|0),50+(nx()*205|0)], col2:[50+(nx()*205|0),50+(nx()*205|0),50+(nx()*205|0)], r:nx() }; }
+function lnTransport(){ let C=CFG.lanes, e=[], seen=new Set(), maxD=C.officialDist*C.transRange, m2=maxD*maxD, hubs=[];   // trunk arteries between hub systems
+  for(let i=0;i<galaxy.length;i++) if(galaxy[i].tier>=C.transTier) hubs.push(i);
+  for(const i of hubs){ let cand=[]; for(const j of hubs){ if(i===j)continue; let d2=lnDist2(i,j); if(d2<=m2) cand.push({j,d2}); } cand.sort((a,b)=>a.d2-b.d2);
+    for(let k=0;k<Math.min(C.transLinks,cand.length);k++){ let j=cand[k].j, key=lnEk(i,j); if(seen.has(key))continue; seen.add(key); e.push([i,j]); } }
+  return e; }
 function lnBuild(){ laneList=[]; if(!galaxy.length){ lnNeedsBuild=false; return; }
   let C=CFG.lanes, seen=new Set(), oD=C.officialDist;
   let base = C.connMode==='threshold'? lnThresh(oD) : C.connMode==='mst'? lnMst() : C.connMode==='gabriel'? lnGabriel(oD*1.3) : lnKnn(oD);
-  for(const [a,b] of base){ let key=lnEk(a,b); if(seen.has(key))continue; seen.add(key); laneList.push(lnMk(a,b, lnDist2(a,b)<oD*oD)); }
+  for(const [a,b] of base){ let key=lnEk(a,b); if(seen.has(key))continue; seen.add(key); laneList.push(lnMk(a,b, lnDist2(a,b)<oD*oD?'off':'uno')); }
   if(C.unoOn && C.unofficialLinks>0){ let lo2=oD*oD, hi=oD*C.unofficialMult, hi2=hi*hi;
     for(let i=0;i<galaxy.length;i++){ let cand=[]; for(let j=0;j<galaxy.length;j++){ if(i===j)continue; let d2=lnDist2(i,j); if(d2>=lo2&&d2<hi2) cand.push({j,d2}); } cand.sort((a,b)=>a.d2-b.d2);
-      for(let k=0;k<Math.min(C.unofficialLinks,cand.length);k++){ let j=cand[k].j, key=lnEk(i,j); if(seen.has(key))continue; seen.add(key); laneList.push(lnMk(i,j,false)); } } }
+      for(let k=0;k<Math.min(C.unofficialLinks,cand.length);k++){ let j=cand[k].j, key=lnEk(i,j); if(seen.has(key))continue; seen.add(key); laneList.push(lnMk(i,j,'uno')); } } }
+  if(C.transOn){ for(const [a,b] of lnTransport()) laneList.push(lnMk(a,b,'trans')); }   // independent overlay: coexists with official/unofficial on shared routes (they blend additively)
+  let ord={trans:0, uno:1, off:2}; laneList.sort((p,q)=>ord[p.kind]-ord[q.kind]);   // draw order: trunk glow behind, detailed lanes on top
   lnRegenPaths(); lnNeedsBuild=false;
 }
 function lnGenPath(seed){ let C=CFG.lanes; if(C.pathMode==='straight') return null;
@@ -339,11 +352,11 @@ function lnGenPath(seed){ let C=CFG.lanes; if(C.pathMode==='straight') return nu
   for(let it=0;it<iters;it++){ let nx=[pts[0]]; for(let i=0;i<pts.length-1;i++){ let A=pts[i],B=pts[i+1]; nx.push({t:(A.t+B.t)/2,d:(A.d+B.d)/2+rnd()*rough*Math.pow(0.55,it)}); nx.push(B); } pts=nx; }
   return pts; }
 function lnRegenPaths(){ for(const L of laneList) L.td=lnGenPath((L.a*131+L.b*977+(CFG.gen.seed|0)*31)>>>0); lnNeedsPath=false; }
-function lnColor(L,which){ let C=CFG.lanes;
-  if(C.colorMode==='multi') return which?L.col2:L.col;
-  if(C.colorMode==='type')  return L.official?C.offColor:C.unoColor;
-  if(C.colorMode==='tier')  return LANE_TIER_COLS[Math.max(galaxy[L.a].tier,galaxy[L.b].tier)-1];
-  return C.offColor; }
+function lnColor(L,which){ let C=CFG.lanes, k=L.kind,
+      mode = k==='trans'?C.transColorMode : k==='uno'?C.unoColorMode : C.offColorMode;   // each lane type has its own color mode
+  if(mode==='multi') return which?L.col2:L.col;
+  if(mode==='tier')  return LANE_TIER_COLS[Math.max(galaxy[L.a].tier,galaxy[L.b].tier)-1];
+  return k==='trans'?C.transColor : k==='uno'?C.unoColor : C.offColor; }   // single: the type's own color
 function lnBeam(ax,ay,bx,by, laneOff, td, len0, ux,uy,nx,ny, col, st,w,op,glow,ef,cv){
   let C=CFG.lanes, dc=drawingContext;
   if(laneOff){ ax+=nx*laneOff; ay+=ny*laneOff; bx+=nx*laneOff; by+=ny*laneOff; }
@@ -367,15 +380,18 @@ function lnBeam(ax,ay,bx,by, laneOff, td, len0, ux,uy,nx,ny, col, st,w,op,glow,e
   dc.setLineDash([]); let g=dc.createLinearGradient(ax,ay,bx,by), f=Math.max(0.001,Math.min(0.49,ef)); g.addColorStop(0,rgba(col,0)); g.addColorStop(f,rgba(col,op)); g.addColorStop(1-f,rgba(col,op)); g.addColorStop(1,rgba(col,0)); dc.strokeStyle=g; dc.lineWidth=w; build(); dc.stroke();
 }
 function lnDrawOne(L, ax,ay,bx,by, z){
-  let C=CFG.lanes, o=L.official;
-  if(!o && C.unoBeamless) return;
+  let C=CFG.lanes, k=L.kind;
+  if((k==='uno' && C.unoBeamless) || (k==='trans' && C.transBeamless)) return;
+  let st,w,op,glow,tw,lg,eg,ef,cv;
+  if(k==='trans'){ st=C.transStyle; w=C.transW; op=C.transOpacity; glow=C.transGlow; tw=C.transTwoWay; lg=C.transLaneGap; eg=C.transEndGap; ef=C.transEndFade; cv=C.transCurve; }
+  else if(k==='uno'){ st=C.unoStyle; w=C.unoW; op=C.unoOpacity; glow=C.unoGlow; tw=C.unoTwoWay; lg=C.unoLaneGap; eg=C.unoEndGap; ef=C.unoEndFade; cv=C.unoCurve; }
+  else { st=C.offStyle; w=C.offW; op=C.offOpacity; glow=C.offGlow; tw=C.offTwoWay; lg=C.offLaneGap; eg=C.offEndGap; ef=C.offEndFade; cv=C.offCurve; }
+  op*=lnBreathe;
   let dx=bx-ax, dy=by-ay, len=Math.hypot(dx,dy); if(len<2) return; let ux=dx/len, uy=dy/len, nx=-uy, ny=ux;
-  let gap=(o?C.offEndGap:C.unoEndGap)*z; ax+=ux*gap; ay+=uy*gap; bx-=ux*gap; by-=uy*gap;
+  let gap=eg*z; ax+=ux*gap; ay+=uy*gap; bx-=ux*gap; by-=uy*gap;
   if(Math.hypot(bx-ax,by-ay)<2) return;
-  let st=o?C.offStyle:C.unoStyle, w=o?C.offW:C.unoW, op=(o?C.offOpacity:C.unoOpacity)*lnBreathe,
-      glow=o?C.offGlow:C.unoGlow, ef=o?C.offEndFade:C.unoEndFade, cv=o?C.offCurve:C.unoCurve,
-      td=(C.pathMode!=='straight')?L.td:null;
-  if(o?C.offTwoWay:C.unoTwoWay){ let off=(o?C.offLaneGap:C.unoLaneGap)*(0.6+0.8*L.r);
+  let td=(C.pathMode!=='straight')?L.td:null;
+  if(tw){ let off=lg*(0.6+0.8*L.r);
     lnBeam(ax,ay,bx,by, off, td, len, ux,uy,nx,ny, lnColor(L,0), st,w,op,glow,ef,cv);
     lnBeam(ax,ay,bx,by,-off, td, len, ux,uy,nx,ny, lnColor(L,1), st,w,op,glow,ef,cv);
   } else lnBeam(ax,ay,bx,by, 0, td, len, ux,uy,nx,ny, lnColor(L,0), st,w,op,glow,ef,cv);
@@ -660,15 +676,16 @@ function afterConfigChange(){                               // re-bake everythin
 function autoSave(force){ let s=JSON.stringify(studioSnapshot()); if(!force && s===lastSaved) return; try{ localStorage.setItem(CFG_KEY,s); lastSaved=s; }catch(e){} }
 function loadState(){ try{ let s=localStorage.getItem(CFG_KEY); if(!s) return false; applySnapshot(JSON.parse(s)); lastSaved=s; return true; }catch(e){ return false; } }
 function exportCFG(){
-  let name=prompt('Export as filename:', 'galaxy_cfg.json'); if(name===null) return;   // cancelled
-  name=name.trim()||'galaxy_cfg.json'; if(!/\.json$/i.test(name)) name+='.json';
-  let blob=new Blob([JSON.stringify(studioSnapshot(),null,2)],{type:'application/json'});
-  let a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  let el=document.getElementById('export-name'); let name=((el&&el.value)||'galaxy_cfg.json').trim()||'galaxy_cfg.json';   // filename from the toolbar field (prompt() is blocked in some panes)
+  if(!/\.json$/i.test(name)) name+='.json';
+  let url=URL.createObjectURL(new Blob([JSON.stringify(studioSnapshot(),null,2)],{type:'application/json'}));
+  let a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();   // in-DOM anchor: some browsers ignore a detached click
+  setTimeout(()=>URL.revokeObjectURL(url), 1500);
 }
 function importCFG(file){
   let rd=new FileReader();
   rd.onload=()=>{ try{ applySnapshot(JSON.parse(rd.result)); afterConfigChange(); autoSave(true); }
-    catch(err){ alert('Bad config JSON: '+err.message); } };
+    catch(err){ try{ alert('Bad config JSON: '+err.message); }catch(_){ console.warn('Bad config JSON:', err.message); } } };
   rd.readAsText(file);
 }
 
@@ -914,36 +931,43 @@ const BACKDROP_SCHEMA = [
   ['Bake includes (off = drawn live)', [['bake_base','Base','bool'],['bake_img','Image','bool'],['bake_neb','Nebula','bool'],['bake_grid','Grid','bool'],['bake_fade','Fade','bool']]]
 ];
 const LN_OPT_CONN =[['knn','K-nearest (tier)'],['threshold','All within range'],['mst','Spanning tree'],['gabriel','Gabriel web']];
-const LN_OPT_COLOR=[['multi','Multicolor'],['type','By type'],['tier','By tier'],['single','Single']];
+const LN_OPT_CMODE=[['multi','Multicolor'],['single','Single color'],['tier','By tier']];
 const LN_OPT_STYLE=[['gradient','Gradient (soft ends)'],['solid','Solid'],['glow','Glow + core'],['dashed','Dashed'],['taper','Taper spindle']];
 const LN_OPT_PATH =[['straight','Straight / curve'],['fractal','Fractal (jagged)'],['river','River (smooth)'],['road','Road (subtle)']];
 const LANES_SCHEMA = [
   ['Lanes', [['on','Lanes on','bool'],['connMode','Strategy','select',LN_OPT_CONN],['officialDist','Official range','range',80,600,10],
     ['tierLinkBase','Links base','range',1,8,1],['tierLinkMult','Links / tier','range',0,4,1]]],
   ['Unofficial (long) lanes', [['unoOn','On','bool'],['unofficialMult','Range ×','range',1.2,3.5,0.05],['unofficialLinks','Links / sys','range',0,4,1],['unoBeamless','Beamless','bool']]],
-  ['Color', [['colorMode','Mode','select',LN_OPT_COLOR],['offColor','Official / single','color'],['unoColor','Unofficial','color']]],
+  ['Transport (trunk) lanes', [['transOn','On','bool'],['transTier','Hub tier ≥','range',1,3,1],['transLinks','Links / hub','range',1,4,1],['transRange','Range ×','range',1,4,0.1],['transBeamless','Beamless','bool']]],
+  ['Color', [['offColorMode','Official mode','select',LN_OPT_CMODE],['offColor','Official color','color'],
+    ['unoColorMode','Unofficial mode','select',LN_OPT_CMODE],['unoColor','Unofficial color','color'],
+    ['transColorMode','Transport mode','select',LN_OPT_CMODE],['transColor','Transport color','color']]],
   ['Official style', [['offStyle','Style','select',LN_OPT_STYLE],['offW','Width','range',0.3,8,0.1],['offOpacity','Opacity','range',0,1,0.01],
     ['offGlow','Glow','range',0,5,0.1],['offTwoWay','Two-way','bool'],['offLaneGap','Lane gap','range',0,14,0.5],
     ['offEndGap','Node gap','range',0,50,1],['offEndFade','End fade','range',0,0.49,0.01],['offCurve','Curve','range',-2,2,0.05]]],
   ['Unofficial style', [['unoStyle','Style','select',LN_OPT_STYLE],['unoTwoWay','Two-way','bool'],['unoW','Width','range',0.3,8,0.1],
     ['unoOpacity','Opacity','range',0,1,0.01],['unoGlow','Glow','range',0,5,0.1],['unoLaneGap','Lane gap','range',0,14,0.5],
     ['unoEndGap','Node gap','range',0,50,1],['unoEndFade','End fade','range',0,0.49,0.01],['unoCurve','Curve','range',-2,2,0.05]]],
+  ['Transport style', [['transStyle','Style','select',LN_OPT_STYLE],['transTwoWay','Two-way','bool'],['transW','Width','range',0.3,8,0.1],
+    ['transOpacity','Opacity','range',0,1,0.01],['transGlow','Glow','range',0,5,0.1],['transLaneGap','Lane gap','range',0,14,0.5],
+    ['transEndGap','Node gap','range',0,50,1],['transEndFade','End fade','range',0,0.49,0.01],['transCurve','Curve','range',-2,2,0.05]]],
   ['Path shape', [['pathMode','Path','select',LN_OPT_PATH],['pathRough','Roughness','range',0,0.6,0.01],['pathDetail','Detail','range',1,6,1]]],
   ['Dash & animation', [['dashLen','Dash len','range',1,30,1],['dashGap','Dash gap','range',1,30,1],['flowDash','Flow dashes','bool'],
     ['flowOppose','2-way opposite','bool'],['breathe','Breathe','bool'],['breatheSpeed','Breathe spd','range',0.1,3,0.05],
     ['breatheAmt','Breathe amt','range',0,1,0.01],['animSpeed','Anim speed','range',-3,3,0.05]]]
 ];
-const LN_BUILD_KEYS=new Set(['connMode','officialDist','tierLinkBase','tierLinkMult','unoOn','unofficialMult','unofficialLinks']);
+const LN_BUILD_KEYS=new Set(['connMode','officialDist','tierLinkBase','tierLinkMult','unoOn','unofficialMult','unofficialLinks','transOn','transTier','transLinks','transRange']);
 const LN_PATH_KEYS =new Set(['pathMode','pathRough','pathDetail']);
 function onLaneChange(key){ if(LN_BUILD_KEYS.has(key)) lnNeedsBuild=true; else if(LN_PATH_KEYS.has(key)) lnNeedsPath=true; }
 const LANE_PRESETS = {
-  galaxy01:  {name:'galaxy_01 multicolor', ov:{connMode:'knn',colorMode:'multi',offStyle:'gradient',offW:1.8,offOpacity:0.85,offGlow:2.2,offTwoWay:true,offLaneGap:4,offEndGap:14,offEndFade:0.15,offCurve:0,unoOn:true,unoBeamless:true,pathMode:'straight'}},
-  economy:   {name:'IE economy (blue/red)', ov:{connMode:'knn',colorMode:'type',offColor:[100,150,255],unoColor:[255,60,60],offStyle:'gradient',offW:2.4,offOpacity:0.8,offTwoWay:false,unoOn:true,unoBeamless:false,unoStyle:'solid',unoW:1,unoOpacity:0.3,pathMode:'straight'}},
-  neon:      {name:'neon glow', ov:{colorMode:'single',offColor:[120,240,255],offStyle:'glow',offGlow:3,offW:2,offOpacity:0.9,offTwoWay:false,unoOn:true,unoBeamless:false,unoStyle:'glow',unoOpacity:0.35,pathMode:'straight'}},
-  mst:       {name:'MST backbone', ov:{connMode:'mst',colorMode:'single',offColor:[160,200,255],offStyle:'solid',offW:1.4,offOpacity:0.75,offTwoWay:false,unoOn:false,pathMode:'straight'}},
-  web:       {name:'Gabriel web', ov:{connMode:'gabriel',colorMode:'tier',offStyle:'gradient',offW:1.4,offOpacity:0.6,offTwoWay:false,unoOn:false,pathMode:'straight'}},
-  rivers:    {name:'rivers', ov:{connMode:'mst',colorMode:'single',offColor:[90,175,235],offStyle:'gradient',offW:2.6,offOpacity:0.7,offTwoWay:false,offEndGap:12,offEndFade:0.1,unoOn:false,pathMode:'river',pathRough:0.26,pathDetail:4}},
-  lightning: {name:'lightning', ov:{connMode:'knn',colorMode:'single',offColor:[150,220,255],offStyle:'glow',offGlow:2.4,offW:1.4,offOpacity:0.9,offTwoWay:false,offEndGap:10,unoOn:false,pathMode:'fractal',pathRough:0.3,pathDetail:5}}
+  galaxy01:  {name:'galaxy_01 multicolor', ov:{connMode:'knn',offColorMode:'multi',unoColorMode:'single',transColorMode:'single',offStyle:'gradient',offW:1.8,offOpacity:0.85,offGlow:2.2,offTwoWay:true,offLaneGap:4,offEndGap:14,offEndFade:0.15,offCurve:0,unoOn:true,unoBeamless:true,transOn:false,pathMode:'straight'}},
+  economy:   {name:'IE economy (3-tier)', ov:{connMode:'knn',offColorMode:'single',unoColorMode:'single',transColorMode:'single',offColor:[100,150,255],unoColor:[255,60,60],transColor:[255,180,80],offStyle:'gradient',offW:2,offOpacity:0.75,offTwoWay:false,unoOn:true,unoBeamless:false,unoStyle:'solid',unoW:1,unoOpacity:0.3,transOn:true,transTier:2,transLinks:2,transRange:2.6,transStyle:'glow',transW:2.8,transOpacity:0.8,transGlow:3,transTwoWay:true,pathMode:'straight'}},
+  neon:      {name:'neon glow', ov:{offColorMode:'single',unoColorMode:'single',offColor:[120,240,255],offStyle:'glow',offGlow:3,offW:2,offOpacity:0.9,offTwoWay:false,unoOn:true,unoBeamless:false,unoStyle:'glow',unoColor:[120,240,255],unoOpacity:0.35,transOn:false,pathMode:'straight'}},
+  mst:       {name:'MST backbone', ov:{connMode:'mst',offColorMode:'single',offColor:[160,200,255],offStyle:'solid',offW:1.4,offOpacity:0.75,offTwoWay:false,unoOn:false,transOn:false,pathMode:'straight'}},
+  web:       {name:'Gabriel web', ov:{connMode:'gabriel',offColorMode:'tier',offStyle:'gradient',offW:1.4,offOpacity:0.6,offTwoWay:false,unoOn:false,transOn:false,pathMode:'straight'}},
+  trunk:     {name:'trunk arteries', ov:{connMode:'knn',offColorMode:'single',transColorMode:'single',offColor:[110,150,230],unoColor:[200,80,80],transColor:[255,180,80],offStyle:'gradient',offW:1.4,offOpacity:0.5,offTwoWay:false,unoOn:false,transOn:true,transTier:2,transLinks:2,transRange:2.8,transStyle:'glow',transW:3,transOpacity:0.85,transGlow:3.2,transTwoWay:true,transLaneGap:5,pathMode:'straight'}},
+  rivers:    {name:'rivers', ov:{connMode:'mst',offColorMode:'single',offColor:[90,175,235],offStyle:'gradient',offW:2.6,offOpacity:0.7,offTwoWay:false,offEndGap:12,offEndFade:0.1,unoOn:false,transOn:false,pathMode:'river',pathRough:0.26,pathDetail:4}},
+  lightning: {name:'lightning', ov:{connMode:'knn',offColorMode:'single',offColor:[150,220,255],offStyle:'glow',offGlow:2.4,offW:1.4,offOpacity:0.9,offTwoWay:false,offEndGap:10,unoOn:false,transOn:false,pathMode:'fractal',pathRough:0.3,pathDetail:5}}
 };
 let lnPreset='galaxy01';
 function applyLanePreset(name){ let p=LANE_PRESETS[name]; if(!p)return; lnPreset=name; Object.assign(CFG.lanes, JSON.parse(JSON.stringify(p.ov))); lnNeedsBuild=true; showPage(); }
