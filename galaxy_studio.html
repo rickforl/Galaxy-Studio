@@ -64,7 +64,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '38';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '39';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -145,7 +145,7 @@ let CFG = {
     dashLen:7, dashGap:7, flowDash:false, flowOppose:true, breathe:false, breatheSpeed:1, breatheAmt:0.4, animSpeed:1
   },
   traffic: {
-    on:true, speed:1.0, viewBg:'lanes',
+    on:true, speed:1.0, viewBg:'lanes', lod:true,
     layers:[
       { name:'Official',   on:true, kind:'off',      style:'civilian', count:5, speed:1.0, size:1.0, colorMode:'lanematch', color:[120,200,255], dir:'random', gap:4, fade:0.15, minDist:300, maxDist:650, links:1, seed:11 },
       { name:'Unofficial', on:true, kind:'uno',      style:'particle', count:2, speed:0.8, size:0.9, colorMode:'single',    color:[255,120,120], dir:'random', gap:3, fade:0.15, minDist:300, maxDist:650, links:1, seed:22 },
@@ -453,9 +453,10 @@ function trGlow(x,y,r,c,a){ let dc=drawingContext, g=dc.createRadialGradient(x,y
 function trTri(x,y,ang,r,c){ let dc=drawingContext; dc.save(); dc.translate(x,y); dc.rotate(ang); dc.fillStyle=rgba(c,0.95); dc.beginPath(); dc.moveTo(r,0); dc.lineTo(-r*0.72,r*0.62); dc.lineTo(-r*0.72,-r*0.62); dc.closePath(); dc.fill(); dc.restore(); }
 function trShipXY(a,b,s,t,gap){ let p=((s.base+t*s.spd)%1+1)%1, frac=s.dir>0?p:1-p, dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1, nx=-dy/len, ny=dx/len, g=(s.lane===0?gap:-gap);
   return { x:a.x+dx*frac+nx*g, y:a.y+dy*frac+ny*g, ang:Math.atan2(dy*s.dir,dx*s.dir), frac, dir:s.dir, u:{x:dx/len,y:dy/len} }; }
-function trafRenderShips(a,b, ships, L, t, laneCol){
+function trafRenderShips(a,b, ships, L, t, laneCol, lodF){
   let sz=L.size, st=L.style, gap=(L.gap||0), fade=L.fade||0, dc=drawingContext;
-  for(const s of ships){ let p=trShipXY(a,b,s,t,gap), c=trafColor(s,L,laneCol);
+  let lim=(lodF==null||lodF>=1)?ships.length:Math.max(1,Math.round(ships.length*lodF));   // LOD: fewer ships when zoomed out
+  for(let i=0;i<lim;i++){ let s=ships[i], p=trShipXY(a,b,s,t,gap), c=trafColor(s,L,laneCol);
     let al=1; if(fade>0){ if(p.frac<fade) al=p.frac/fade; else if(p.frac>1-fade) al=(1-p.frac)/fade; }        // fade at the ends
     if(st==='triangle'){ trTri(p.x,p.y,p.ang,4.4*sz,c); }
     else if(st==='comet'){ let tl=14*sz, tx=p.x-p.u.x*p.dir*tl, ty=p.y-p.u.y*p.dir*tl, g=dc.createLinearGradient(tx,ty,p.x,p.y); g.addColorStop(0,rgba(c,0)); g.addColorStop(1,rgba(c,0.6*al)); dc.strokeStyle=g; dc.lineWidth=1.8*sz; dc.lineCap='round'; dc.beginPath(); dc.moveTo(tx,ty); dc.lineTo(p.x,p.y); dc.stroke(); trDot(p.x,p.y,1.7*sz,[255,255,255],0.9*al); trGlow(p.x,p.y,5*sz,c,0.5*al); }
@@ -473,6 +474,7 @@ function drawTraffic(camX,camY,camZoom){
   let TC=CFG.traffic; if(!TC.on || !galaxy.length) return;
   if(lnNeedsBuild) lnBuild();
   let cx=(camX!==undefined)?camX:cam.x, cy=(camY!==undefined)?camY:cam.y, z=(camZoom!==undefined)?camZoom:cam.zoom;
+  let isGalaxy=(camZoom===undefined), lodF=(isGalaxy&&TC.lod)? Math.min(1,Math.max(0.2,(z-0.08)/0.5)) : 1;   // LOD only in the full galaxy view
   let px=(PANELW+width)/2, py=height/2, M=80, off=(a,b)=>((a<PANELW-M&&b<PANELW-M)||(a>width+M&&b>width+M));
   push(); blendMode(ADD);
   for(const L of TC.layers){ if(!L.on) continue;
@@ -480,13 +482,13 @@ function drawTraffic(camX,camY,camZoom){
       for(let pi=0;pi<pairs.length;pi++){ let A=galaxy[pairs[pi][0]], B=galaxy[pairs[pi][1]];
         let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
         if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
-        trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,pi), L, L.time||0, L.color); }
+        trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,pi), L, L.time||0, L.color, lodF); }
       continue; }
     for(let li=0;li<laneList.length;li++){ let lane=laneList[li]; if(lane.kind!==L.kind) continue;
       let A=galaxy[lane.a], B=galaxy[lane.b];
       let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
       if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
-      trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,li), L, L.time||0, lnColor(lane,0)); }
+      trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,li), L, L.time||0, lnColor(lane,0), lodF); }
   }
   pop(); blendMode(BLEND);
 }
@@ -572,20 +574,25 @@ function buildTrafficPanel(body){
   let g=document.createElement('div'); g.className='grp'; g.textContent='Global'; body.appendChild(g);
   trafBool(body,'Traffic on', CFG.traffic.on, v=>{CFG.traffic.on=v;});
   trafRange(body,'Speed ×', 0,3,0.05, CFG.traffic.speed, v=>{CFG.traffic.speed=v;});
+  trafSelect(body,'View bg', [['lanes','Lanes only'],['dim','Dimmed galaxy'],['full','Full context']], CFG.traffic.viewBg, v=>{CFG.traffic.viewBg=v;});
+  trafBool(body,'LOD by zoom', CFG.traffic.lod, v=>{CFG.traffic.lod=v;});
   let h=document.createElement('div'); h.className='grp'; h.textContent='Layers (☑ = render)'; body.appendChild(h);
   CFG.traffic.layers.forEach((L,idx)=> trafLayerBlock(body,L,idx));
   let add=document.createElement('button'); add.className='act-btn'; add.textContent='+ add traffic layer'; add.onclick=()=>{ CFG.traffic.layers.push(trafNewLayer()); showPage(); }; body.appendChild(add);
   let hint=document.createElement('div'); hint.className='hint'; hint.textContent='Each layer rides a lane class (Official/Unofficial/Transport) or self-routes (Smugglers). ☑ renders it in the view. Ships draw on top of the real lanes. (Edit-grid picker, lane-matched sample, and view-backgrounds land next.)'; body.appendChild(hint);
 }
 function drawTrafficPreview(){
-  background(3,4,9);
   let TC=CFG.traffic, px=(PANELW+width)/2, py=height/2, playW=width-PANELW;
-  if(!galaxy.length){ blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER,CENTER); text('no systems — generate a galaxy first', px, py); return; }
+  if(!galaxy.length){ background(3,4,9); blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER,CENTER); text('no systems — generate a galaxy first', px, py); return; }
   let ext=1; for(const s of galaxy){ let ax=Math.abs(s.x), ay=Math.abs(s.y); if(ax>ext)ext=ax; if(ay>ext)ext=ay; }
   let fit=Math.min(playW,height)*0.9/(2*ext);
+  if(TC.viewBg!=='lanes'){                                   // dimmed / full: render the real backdrop + stars behind, at the fit scale
+    background(4,5,9); let sx=cam.x,sy=cam.y,sz=cam.zoom; cam.x=0; cam.y=0; cam.zoom=fit; drawBackdrop(true); drawStars(); cam.x=sx; cam.y=sy; cam.zoom=sz;
+    if(TC.viewBg==='dim'){ blendMode(BLEND); noStroke(); fill(4,5,9,160); rect(PANELW,0,playW,height); }
+  } else background(3,4,9);
   drawLanes(0,0,fit);                                        // lanes beneath (respects the Lanes tab)
   drawTraffic(0,0,fit);                                      // ships on top
-  noStroke(); for(const s of galaxy){ let x=px+s.x*fit, y=py+s.y*fit, r=1.6+(s.tier-1)*1.4; fill(s.color[0],s.color[1],s.color[2],235); circle(x,y,r*2); }
+  blendMode(BLEND); noStroke(); for(const s of galaxy){ let x=px+s.x*fit, y=py+s.y*fit, r=1.6+(s.tier-1)*1.4; fill(s.color[0],s.color[1],s.color[2],235); circle(x,y,r*2); }
   blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
   let nL=TC.layers.filter(l=>l.on).length;
   text('traffic preview · '+nL+' of '+TC.layers.length+' layers · lanes + ships · full context in VIEW GALAXY', px, height-16);
