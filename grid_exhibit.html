@@ -31,7 +31,7 @@
 </div>
 <div id="panel"></div>
 <script>
-const BUILD_DATE='20260718', BUILD_SEQ='01', BUILD_ID='grid_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+const BUILD_DATE='20260718', BUILD_SEQ='04', BUILD_ID='grid_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
 const PANELW=256, TOPH=31;
 
 // ---------- config ----------
@@ -40,7 +40,8 @@ let G = {
   color:[70,140,210], opacity:0.5, weight:1, bg:[6,10,18],
   radius:1000, showBoundary:true, boundaryColor:[110,200,255], boundaryOpacity:0.85, showOrigin:true, clip:false,
   // square
-  sqSpacing:150, sqMajor:5,
+  sqSpacing:150, sqMajor:5, sqSubdiv:1, sqLabelMode:'coord', invertX:false, invertY:false,   // world | coord (A1 sectors) | index (col,row) | line (numbered grid lines); invert = count that axis the other way
+  lineNumMajor:true, lineNumMinor:false,   // line-numbers mode: which line tiers get numbered
   // polar
   ringSpacing:150, spokeCount:12, angleOffset:0,
   // hex
@@ -62,7 +63,7 @@ const OPT_TYPE=[['square','Square (Cartesian)'],['polar','Polar (rings + spokes)
 const SCHEMA = [
   ['Grid', [['type','Type','select',OPT_TYPE],['color','Line color','color'],['opacity','Opacity','range',0,1,0.01],['weight','Weight','range',0.25,4,0.25],['bg','Background','color']]],
   ['Boundary (galaxy edge)', [['showBoundary','Boundary','bool'],['radius','Radius','range',200,4000,50],['boundaryColor','Color','color'],['boundaryOpacity','Opacity','range',0,1,0.01],['clip','Clip grid to it','bool'],['showOrigin','Origin marker','bool']]],
-  ['Square', [['sqSpacing','Spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1]]],
+  ['Square', [['sqSpacing','Spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1],['sqSubdiv','Subdivisions','range',1,10,1],['sqLabelMode','Label mode','select',[['world','World coords'],['coord','Sectors (A1)'],['index','Cell index'],['line','Line numbers']]],['lineNumMajor','Number major lines','bool'],['lineNumMinor','Number minor lines','bool'],['invertX','Invert cols (X)','bool'],['invertY','Invert rows (Y)','bool']]],
   ['Polar', [['ringSpacing','Ring spacing','range',30,600,10],['spokeCount','Spokes','range',0,48,1],['angleOffset','Angle offset','range',0,360,1]]],
   ['Hex', [['hexSize','Hex size','range',30,400,5],['hexFlat','Flat-top','bool']]],
   ['Labels', [['labels','Labels','bool'],['sectorLetters','Sector letters','bool'],['labelColor','Color','color'],['labelSize','Size','range',8,20,1]]],
@@ -85,6 +86,7 @@ function genSystems(){ systems=[]; let rs=(G.systemSeed>>>0)||1, rnd=()=>{ rs=(r
 
 // ---------- draw helpers ----------
 function rgba(c,a){ return 'rgba('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+a+')'; }
+function colLetter(n){ let s=''; n=n|0; do{ s=String.fromCharCode(65+(n%26))+s; n=Math.floor(n/26)-1; }while(n>=0); return s; }   // 0->A .. 25->Z, 26->AA ...
 function segW(ax,ay,bx,by, col, w){ let a=w2s(ax,ay), b=w2s(bx,by), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
 function circW(r, col, w){ let o=w2s(0,0), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.arc(o.x,o.y, r*cam.zoom, 0, Math.PI*2); dc.stroke(); }
 function label(txt, wx, wy, dx, dy){ let s=w2s(wx,wy); noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2], 230); textSize(G.labelSize); text(txt, s.x+dx, s.y+dy); }
@@ -97,15 +99,40 @@ function drawSquareGrid(){
   let y0=Math.max(V.y0, G.clip?-G.radius:V.y0), y1=Math.min(V.y1, G.clip?G.radius:V.y1);
   let n=Math.ceil((V.x1-V.x0)/sp)+Math.ceil((V.y1-V.y0)/sp); if(n>4000) return;   // perf guard
   let base=rgba(G.color, G.opacity), majc=rgba(G.color, Math.min(1,G.opacity*1.9)), axc=rgba(G.color, Math.min(1,G.opacity*2.6));
+  let subc=rgba(G.color, G.opacity*0.4);
   dc.lineCap='butt';
+  let sub=Math.max(1,Math.round(G.sqSubdiv));
+  if(sub>1 && (sp/sub)*cam.zoom >= 6){ let step=sp/sub;                            // finer subdivision lines, drawn under the base grid, only when legible
+    for(let i=Math.ceil(V.x0/step); i*step<=V.x1; i++){ if(((i%sub)+sub)%sub===0) continue; segW(i*step,V.y0,i*step,V.y1, subc, G.weight*0.6); }
+    for(let i=Math.ceil(V.y0/step); i*step<=V.y1; i++){ if(((i%sub)+sub)%sub===0) continue; segW(V.x0,i*step,V.x1,i*step, subc, G.weight*0.6); }
+  }
   for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp), major=(k%G.sqMajor===0), axis=(k===0);
     segW(wx,V.y0,wx,V.y1, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
   for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp), major=(k%G.sqMajor===0), axis=(k===0);
     segW(V.x0,wy,V.x1,wy, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
-  if(G.labels){ textAlign(CENTER,TOP);
-    for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp); if(k%G.sqMajor===0) label((wx|0)+'', wx, 0, 0, 4); }
-    textAlign(LEFT,CENTER);
-    for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor===0 && k!==0) label((wy|0)+'', 0, wy, 5, 0); }
+  if(G.labels){
+    if(G.sqLabelMode==='world'){ textAlign(CENTER,TOP);
+      for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp); if(k%G.sqMajor===0) label((wx|0)+'', wx, 0, 0, 4); }
+      textAlign(LEFT,CENTER);
+      for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor===0 && k!==0) label((wy|0)+'', 0, wy, 5, 0); }
+    } else if(G.sqLabelMode==='line'){                                            // number the grid lines themselves; major/minor tiers toggle independently, edge-anchored 0..max (invert-aware)
+      let kMin=Math.ceil(-G.radius/sp), maxL=Math.floor(G.radius/sp)-kMin, zMinor=sp*cam.zoom>=22;
+      textAlign(CENTER,TOP);
+      for(let k=Math.ceil(V.x0/sp); k*sp<=V.x1; k++){ let idx=k-kMin; if(idx<0||idx>maxL) continue;
+        let major=(k%G.sqMajor===0); if(major? !G.lineNumMajor : (!G.lineNumMinor||!zMinor)) continue;
+        label((G.invertX?maxL-idx:idx)+'', k*sp, 0, 0, 4); }
+      textAlign(LEFT,CENTER);
+      for(let m=Math.ceil(V.y0/sp); m*sp<=V.y1; m++){ let idx=m-kMin; if(idx<0||idx>maxL) continue;
+        let major=(m%G.sqMajor===0); if(major? !G.lineNumMajor : (!G.lineNumMinor||!zMinor)) continue;
+        label((G.invertY?maxL-idx:idx)+'', 0, m*sp, 5, 0); }
+    } else if(sp*cam.zoom >= 30){                                                // per-cell sector coord (galaxy_01-style fixed lattice), anchored to the galaxy top-left; only when cells are big enough to read
+      let kMin=Math.ceil(-G.radius/sp), maxIdx=Math.floor(G.radius/sp-0.5)-kMin; textAlign(CENTER,CENTER);
+      for(let k=Math.floor(V.x0/sp); k*sp<=V.x1; k++){ let cRaw=k-kMin; if(cRaw<0||cRaw>maxIdx) continue;
+        for(let m=Math.floor(V.y0/sp); m*sp<=V.y1; m++){ let rRaw=m-kMin; if(rRaw<0||rRaw>maxIdx) continue;
+          let wx=(k+0.5)*sp, wy=(m+0.5)*sp; if(Math.hypot(wx,wy)>G.radius) continue;
+          let col=G.invertX?maxIdx-cRaw:cRaw, row=G.invertY?maxIdx-rRaw:rRaw;                                 // per-axis invert
+          label(G.sqLabelMode==='index' ? ('('+col+','+row+')') : (colLetter(col)+(row+1)), wx, wy, 0, 0); } }
+    }
   }
 }
 function drawPolarGrid(){
