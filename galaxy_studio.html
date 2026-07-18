@@ -62,7 +62,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '28';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '29';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -489,6 +489,15 @@ function bd_fade(P,E,B){
   g.addColorStop(0, rgba(B.fadeColor,0)); g.addColorStop(1, rgba(B.fadeColor,B.fadeOpacity));
   P.drawingContext.fillStyle=g; P.rect(0,0,2*E,2*E); P.pop();
 }
+function bd_fadeViewport(){                                                   // galaxy view: aspect-aware elliptical vignette over the whole viewport (masks edges on any aspect/zoom)
+  let B=CFG.backdrop, pw=width-PANELW, ph=height, dc=drawingContext;
+  let ri=Math.min(B.fadeInner,B.fadeOuter), ro=Math.max(B.fadeInner,B.fadeOuter)+0.001;
+  push(); noStroke(); rectMode(CENTER);
+  translate(PANELW+pw*0.5, ph*0.5); scale(pw*0.5, ph*0.5);                    // unit circle -> ellipse touching the viewport edge midpoints
+  let g=dc.createRadialGradient(0,0,ri,0,0,ro);
+  g.addColorStop(0, rgba(B.fadeColor,0)); g.addColorStop(1, rgba(B.fadeColor,B.fadeOpacity));
+  dc.fillStyle=g; rect(0,0,3,3); pop();
+}
 function bakeBdLayer(L, E, res){                                              // render one layer into its own transparent buffer
   let b=bdBuf[L];
   if(!b || b.width!==res){ b=createGraphics(res,res); b.pixelDensity(1); bdBuf[L]=b; }
@@ -502,6 +511,7 @@ function drawBackdrop(parallax){                                              //
   let E=bdExtent(), res=CFG.backdrop.bakeRes|0, B=CFG.backdrop, pcx=(PANELW+width)/2, pcy=height/2;
   for(const L of BD_LAYERS){
     if(!B[L+'On']) continue;
+    if(parallax && L==='fade') continue;                                     // fade -> aspect-aware viewport vignette after the loop
     if(parallax){ let p=(B[L+'Parallax']!==undefined?B[L+'Parallax']:1), lz=Math.pow(cam.zoom,p);
       push(); translate(pcx,pcy); translate(cam.x*lz*p, cam.y*lz*p); scale(lz); }   // p=1 -> locked to galaxy; lower -> farther
     if(B['bake_'+L]!==false){                                                 // baked: blit this layer's own buffer (rebuild if dirty/resized)
@@ -513,6 +523,7 @@ function drawBackdrop(parallax){                                              //
     }
     if(parallax){ pop(); }
   }
+  if(parallax && B.fadeOn) bd_fadeViewport();                                 // hides the backdrop edge cutoff, matched to the viewport aspect
   bdDirty=false;
 }
 function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); }       // radius change -> extent change -> re-bake
@@ -781,7 +792,7 @@ const BACKDROP_SCHEMA = [
     ['gridSpacing','Spacing','range',50,600,10],['gridWeight','Line weight','range',0.5,4,0.5]]],
   ['Radial fade (hide edges)', [['fadeOn','Fade','bool'],['fadeColor','Edge color','color'],
     ['fadeInner','Inner','range',0,1,0.01],['fadeOuter','Outer','range',0.2,1.5,0.01],['fadeOpacity','Opacity','range',0,1,0.01]]],
-  ['Parallax (galaxy view)', [['imgParallax','Image','range',0,1,0.01],['nebParallax','Nebula','range',0,1,0.01],['baseParallax','Base','range',0,1,0.01],['gridParallax','Grid','range',0,1,0.01],['fadeParallax','Fade','range',0,1,0.01]]],
+  ['Parallax (galaxy view)', [['imgParallax','Image','range',0,1,0.01],['nebParallax','Nebula','range',0,1,0.01],['baseParallax','Base','range',0,1,0.01],['gridParallax','Grid','range',0,1,0.01]]],
   ['Bake includes (off = drawn live)', [['bake_base','Base','bool'],['bake_img','Image','bool'],['bake_neb','Nebula','bool'],['bake_grid','Grid','bool'],['bake_fade','Fade','bool']]]
 ];
 const PAGES = [
