@@ -64,7 +64,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '43';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '44';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -148,10 +148,10 @@ let CFG = {
   traffic: {
     on:true, speed:1.0, viewBg:'lanes', lod:true,
     layers:[
-      { name:'Official',   on:true, kind:'off',      style:'civilian', count:5, speed:1.0, size:1.0, colorMode:'lanematch', color:[120,200,255], dir:'random', gap:4, fade:0.15, minDist:300, maxDist:650, links:1, seed:11 },
-      { name:'Unofficial', on:true, kind:'uno',      style:'particle', count:2, speed:0.8, size:0.9, colorMode:'single',    color:[255,120,120], dir:'random', gap:3, fade:0.15, minDist:300, maxDist:650, links:1, seed:22 },
-      { name:'Transport',  on:true, kind:'trans',    style:'orbs',     count:3, speed:0.7, size:1.2, colorMode:'lanematch', color:[255,180,80],  dir:'two',    gap:5, fade:0.12, minDist:300, maxDist:650, links:1, seed:33 },
-      { name:'Smugglers',  on:true, kind:'smuggler', style:'civilian', count:1, speed:0.6, size:0.9, colorMode:'multi',     color:[200,160,255], dir:'random', gap:0, fade:0.15, minDist:320, maxDist:680, links:1, seed:44 }
+      { name:'Official',   on:true, kind:'off',      style:'civilian', count:5, speed:1.0, size:1.0, colorMode:'lanematch', color:[120,200,255], dir:'dual2', gap:4, fade:0.15, minDist:300, maxDist:650, links:1, seed:11 },
+      { name:'Unofficial', on:true, kind:'uno',      style:'particle', count:2, speed:0.8, size:0.9, colorMode:'single',    color:[255,120,120], dir:'single2', gap:3, fade:0.15, minDist:300, maxDist:650, links:1, seed:22 },
+      { name:'Transport',  on:true, kind:'trans',    style:'orbs',     count:3, speed:0.7, size:1.2, colorMode:'lanematch', color:[255,180,80],  dir:'dual2',  gap:5, fade:0.12, minDist:300, maxDist:650, links:1, seed:33 },
+      { name:'Smugglers',  on:true, kind:'smuggler', style:'civilian', count:1, speed:0.6, size:0.9, colorMode:'multi',     color:[200,160,255], dir:'single1', gap:0, fade:0.15, minDist:320, maxDist:680, links:1, seed:44 }
     ]
   },
   economy: {}   // filled in later phases
@@ -441,19 +441,18 @@ function drawLanes(camX,camY,camZoom){
 // layer generates its own long-range connections. Ships draw only (no beam — the lane is already there).
 const TRAF_PAL=[[120,200,255],[255,180,90],[130,240,170],[255,120,160],[180,150,255],[255,235,140],[120,255,235]];
 function invalidateTraffic(){ for(const L of CFG.traffic.layers){ L._ships=null; L._pairs=null; } }
+function trNormDir(d){ return d==='two'?'dual2' : (d==='single'?'single1' : (d==='random'?'dual2' : d)); }   // migrate legacy dir values
 function trMakeShips(count, seed, dirModel){ let arr=[], rs=(seed>>>0)||1, rnd=()=>{ rs=(rs*1664525+1013904223)>>>0; return rs/4294967296; };
-  for(let i=0;i<(count|0);i++){ let lane,dir;
-    if(dirModel==='two'){ lane=i%2; dir=lane===0?1:-1; }
-    else if(dirModel==='single'){ lane=0; dir=1; }
-    else { lane=rnd()>0.5?0:1; dir=lane===0?1:-1; }                       // 'random' = galaxy_01 model (each ship picks a lane/dir)
-    arr.push({ base:rnd(), spd:0.7+rnd()*0.7, sz:0.6+rnd()*0.9, ci:Math.floor(rnd()*TRAF_PAL.length), crim:rnd()<0.22, lane, dir }); }
+  let m=trNormDir(dirModel), dual=(m==='dual1'||m==='dual2'), twoway=(m==='single2'||m==='dual2');
+  for(let i=0;i<(count|0);i++){ let off = dual ? ((i%2===0)?1:-1) : 0, dir = twoway ? ((i%2===0)?1:-1) : 1;   // dual = two offset lanes; 2-way = ships alternate direction
+    arr.push({ off, base:rnd(), spd:0.7+rnd()*0.7, sz:0.6+rnd()*0.9, ci:Math.floor(rnd()*TRAF_PAL.length), crim:rnd()<0.22, dir }); }
   return arr; }
 function trGetShips(L, key){ if(!L._ships) L._ships={}; if(!L._ships[key]) L._ships[key]=trMakeShips(L.count, ((key+1)*2654435761 ^ ((L.seed||1)*40503))>>>0, L.dir); return L._ships[key]; }
 function trafColor(s,L,laneCol){ if(L.style==='economy') return s.crim?[255,72,72]:[92,162,255]; if(L.colorMode==='single') return L.color; if(L.colorMode==='lanematch') return laneCol||L.color; return TRAF_PAL[s.ci]; }
 function trDot(x,y,r,c,a){ let dc=drawingContext; dc.fillStyle=rgba(c,a); dc.beginPath(); dc.arc(x,y,r,0,TWO_PI); dc.fill(); }
 function trGlow(x,y,r,c,a){ let dc=drawingContext, g=dc.createRadialGradient(x,y,0,x,y,r); g.addColorStop(0,rgba(c,a)); g.addColorStop(1,rgba(c,0)); dc.fillStyle=g; dc.beginPath(); dc.arc(x,y,r,0,TWO_PI); dc.fill(); }
 function trTri(x,y,ang,r,c){ let dc=drawingContext; dc.save(); dc.translate(x,y); dc.rotate(ang); dc.fillStyle=rgba(c,0.95); dc.beginPath(); dc.moveTo(r,0); dc.lineTo(-r*0.72,r*0.62); dc.lineTo(-r*0.72,-r*0.62); dc.closePath(); dc.fill(); dc.restore(); }
-function trShipXY(a,b,s,t,gap){ let p=((s.base+t*s.spd)%1+1)%1, frac=s.dir>0?p:1-p, dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1, nx=-dy/len, ny=dx/len, g=(s.lane===0?gap:-gap);
+function trShipXY(a,b,s,t,gap){ let p=((s.base+t*s.spd)%1+1)%1, frac=s.dir>0?p:1-p, dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1, nx=-dy/len, ny=dx/len, g=(s.off||0)*gap;
   return { x:a.x+dx*frac+nx*g, y:a.y+dy*frac+ny*g, ang:Math.atan2(dy*s.dir,dx*s.dir), frac, dir:s.dir, u:{x:dx/len,y:dy/len} }; }
 function trafRenderShips(a,b, ships, L, t, laneCol, lodF){
   let sz=L.size, st=L.style, gap=(L.gap||0), fade=L.fade||0, dc=drawingContext;
@@ -521,7 +520,7 @@ function drawTrafficEditGrid(idx){
   }
 }
 const TRAF_STYLE_OPTS=[['civilian','Civilian dots'],['economy','Commercial/criminal'],['comet','Comet trails'],['pulses','Light pulses'],['triangle','Triangle ships'],['particle','Particle stream'],['orbs','Glow orbs']];
-const TRAF_DIR_OPTS=[['random','Random (galaxy_01)'],['two','Two-way'],['single','Single']];
+const TRAF_DIR_OPTS=[['single1','Single lane · 1-way'],['single2','Single lane · 2-way'],['dual1','Dual lane · 1-way'],['dual2','Dual lane · 2-way']];
 const TRAF_CM_OPTS=[['multi','Multicolor'],['single','Single'],['lanematch','Lane-match']];
 const TRAF_KIND_OPTS=[['off','Official lanes'],['uno','Unofficial lanes'],['trans','Transport lanes'],['smuggler','Smugglers (self-route)']];
 function trafRow(parent,label){ let r=document.createElement('label'); r.className='row'; let l=document.createElement('span'); l.className='lab'; l.textContent=label; r.appendChild(l); parent.appendChild(r); return r; }
@@ -529,7 +528,7 @@ function trafBool(parent,label,val,onc){ let r=trafRow(parent,label); let i=docu
 function trafRange(parent,label,mn,mx,st,val,onc){ let r=trafRow(parent,label); let i=document.createElement('input'); i.type='range'; i.min=mn;i.max=mx;i.step=st;i.value=val; let v=document.createElement('span'); v.className='val'; v.textContent=val; i.oninput=()=>{ v.textContent=i.value; onc(parseFloat(i.value)); }; r.appendChild(i); r.appendChild(v); return i; }
 function trafSelect(parent,label,opts,val,onc){ let r=trafRow(parent,label); let s=document.createElement('select'); for(const [v,l] of opts){ let o=document.createElement('option'); o.value=v; o.textContent=l; s.appendChild(o); } s.value=val; s.onchange=()=>onc(s.value); r.appendChild(s); return s; }
 function trafColorInp(parent,label,val,onc){ let r=trafRow(parent,label); let i=document.createElement('input'); i.type='color'; i.value=rgbToHex(val); i.oninput=()=>onc(hexToRgb(i.value)); r.appendChild(i); return i; }
-function trafNewLayer(){ return { name:'Extra', on:true, kind:'off', style:'civilian', count:4, speed:1, size:1, colorMode:'multi', color:[150,200,255], dir:'random', gap:4, fade:0.15, minDist:300, maxDist:680, links:1, seed:(Math.floor(Math.random()*1e6)||1) }; }
+function trafNewLayer(){ return { name:'Extra', on:true, kind:'off', style:'civilian', count:4, speed:1, size:1, colorMode:'multi', color:[150,200,255], dir:'dual2', gap:4, fade:0.15, minDist:300, maxDist:680, links:1, seed:(Math.floor(Math.random()*1e6)||1) }; }
 function trafLayerBlock(body,L,idx){
   let box=document.createElement('div'); box.style.cssText='border:1px solid #2a3550;border-radius:5px;padding:4px 6px;margin:5px 0;';
   let hd=document.createElement('div'); hd.style.cssText='display:flex;align-items:center;gap:6px;margin-bottom:2px;';
@@ -572,6 +571,7 @@ function buildTrafficEditPanel(body, idx){
   let hint=document.createElement('div'); hint.className='hint'; hint.textContent="Cells show each style on a sample lane drawn with this class's Lanes-tab look. Edits preview live in the grid."; body.appendChild(hint);
 }
 function buildTrafficPanel(body){
+  CFG.traffic.layers.forEach(L=>{ L.dir=trNormDir(L.dir); });   // migrate any legacy dir values (random/two/single) to the 4 new modes
   if(trafEditIdx!=null && CFG.traffic.layers[trafEditIdx]){ buildTrafficEditPanel(body, trafEditIdx); return; }
   let g=document.createElement('div'); g.className='grp'; g.textContent='Global'; body.appendChild(g);
   trafBool(body,'Traffic on', CFG.traffic.on, v=>{CFG.traffic.on=v;});
