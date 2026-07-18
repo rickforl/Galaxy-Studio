@@ -62,7 +62,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '30';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '31';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -123,7 +123,22 @@ let CFG = {
       { name:'Bright',  on:true, bake:false, uniform:false, parallax:0.85, count:50,   radius:0.7,  size:3.0, bright:1.1,  color:0.6,  twinkle:0.6,  glow:2.0, spikes:true,  spikeLen:3.0 }
     ]
   },
-  lanes: {}, traffic: {}, economy: {}   // filled in later phases
+  lanes: {
+    on:true,
+    // connections (nodes = the galaxy systems; tiers = their s.tier)
+    connMode:'knn', officialDist:300, tierLinkBase:2, tierLinkMult:1,
+    unoOn:true, unofficialMult:2.0, unofficialLinks:1, unoBeamless:true,
+    // color
+    colorMode:'multi', offColor:[120,200,255], unoColor:[255,90,90],
+    // official beam style
+    offStyle:'gradient', offW:1.8, offOpacity:0.85, offGlow:2.2, offTwoWay:true, offLaneGap:4, offEndGap:14, offEndFade:0.15, offCurve:0,
+    // unofficial beam style
+    unoStyle:'dashed', unoTwoWay:false, unoW:1.0, unoOpacity:0.4, unoGlow:1.4, unoLaneGap:3, unoEndGap:14, unoEndFade:0.15, unoCurve:0,
+    // path shape + animation
+    pathMode:'straight', pathRough:0.18, pathDetail:4,
+    dashLen:7, dashGap:7, flowDash:false, flowOppose:true, breathe:false, breatheSpeed:1, breatheAmt:0.4, animSpeed:1
+  },
+  traffic: {}, economy: {}   // filled in later phases
 };
 let OPTS = CFG.sun;                                 // sun renderer reads OPTS (=== CFG.sun) — unchanged downstream
 const BASE = JSON.parse(JSON.stringify(CFG.sun));   // sun defaults — preset switching resets to these first
@@ -285,10 +300,103 @@ function buildStarsPanel(body){
   hint.textContent='Layered background starfield. Radial layers densify the center via disc overlap (Radius = disc size); Uniform fills evenly. Bake a layer for perf (freezes its twinkle). ▶ VIEW GALAXY shows it behind the systems.';
   body.appendChild(hint);
 }
+// ---------- Lanes: connection beams between galaxy systems (ported from lanes_exhibit) ----------
+// Nodes = the galaxy[] systems (world coords, s.tier). Beams render in screen space, projected
+// through the camera, drawn UNDER the systems. Widths/gaps are screen px; node-gap scales with zoom.
+const LANE_TIER_COLS=[[185,205,235],[255,228,150],[255,150,115]];
+let laneList=[], lnNeedsBuild=true, lnNeedsPath=false, lnBreathe=1;
+function invalidateLanes(){ lnNeedsBuild=true; }
+function lnDist2(a,b){ let A=galaxy[a],B=galaxy[b], dx=A.x-B.x, dy=A.y-B.y; return dx*dx+dy*dy; }
+function lnEk(a,b){ return a<b? a+'_'+b : b+'_'+a; }
+function lnKnn(cap){ let e=[], seen=new Set(), c2=cap*cap, C=CFG.lanes;
+  for(let i=0;i<galaxy.length;i++){ let K=C.tierLinkBase+galaxy[i].tier*C.tierLinkMult, cand=[];
+    for(let j=0;j<galaxy.length;j++){ if(i===j)continue; let d2=lnDist2(i,j); if(d2<=c2) cand.push({j,d2}); }
+    cand.sort((a,b)=>a.d2-b.d2);
+    for(let k=0;k<Math.min(K,cand.length);k++){ let j=cand[k].j, key=lnEk(i,j); if(seen.has(key))continue; seen.add(key); e.push([i,j]); } }
+  return e; }
+function lnThresh(cap){ let e=[], c2=cap*cap; for(let i=0;i<galaxy.length;i++)for(let j=i+1;j<galaxy.length;j++) if(lnDist2(i,j)<=c2) e.push([i,j]); return e; }
+function lnMst(){ let n=galaxy.length; if(n<2)return[]; let inT=new Array(n).fill(false), me=new Array(n).fill(Infinity), par=new Array(n).fill(-1), e=[]; me[0]=0;
+  for(let it=0;it<n;it++){ let u=-1; for(let v=0;v<n;v++) if(!inT[v]&&(u<0||me[v]<me[u])) u=v; if(u<0)break; inT[u]=true; if(par[u]>=0) e.push([par[u],u]);
+    for(let v=0;v<n;v++) if(!inT[v]){ let d2=lnDist2(u,v); if(d2<me[v]){ me[v]=d2; par[v]=u; } } } return e; }
+function lnGabriel(cap){ let e=[], c2=cap*cap; for(let i=0;i<galaxy.length;i++)for(let j=i+1;j<galaxy.length;j++){ let d2=lnDist2(i,j); if(d2>c2)continue;
+  let mx=(galaxy[i].x+galaxy[j].x)/2, my=(galaxy[i].y+galaxy[j].y)/2, r2=d2/4, ok=true;
+  for(let k=0;k<galaxy.length;k++){ if(k===i||k===j)continue; let dx=galaxy[k].x-mx, dy=galaxy[k].y-my; if(dx*dx+dy*dy<r2){ok=false;break;} }
+  if(ok) e.push([i,j]); } return e; }
+function lnMk(a,b,official){ let h=((a*131+b*977+(CFG.gen.seed|0)*7)>>>0), nx=()=>{ h=(h*1664525+1013904223)>>>0; return h/4294967296; };
+  return { a,b,official, col:[50+(nx()*205|0),50+(nx()*205|0),50+(nx()*205|0)], col2:[50+(nx()*205|0),50+(nx()*205|0),50+(nx()*205|0)], r:nx() }; }
+function lnBuild(){ laneList=[]; if(!galaxy.length){ lnNeedsBuild=false; return; }
+  let C=CFG.lanes, seen=new Set(), oD=C.officialDist;
+  let base = C.connMode==='threshold'? lnThresh(oD) : C.connMode==='mst'? lnMst() : C.connMode==='gabriel'? lnGabriel(oD*1.3) : lnKnn(oD);
+  for(const [a,b] of base){ let key=lnEk(a,b); if(seen.has(key))continue; seen.add(key); laneList.push(lnMk(a,b, lnDist2(a,b)<oD*oD)); }
+  if(C.unoOn && C.unofficialLinks>0){ let lo2=oD*oD, hi=oD*C.unofficialMult, hi2=hi*hi;
+    for(let i=0;i<galaxy.length;i++){ let cand=[]; for(let j=0;j<galaxy.length;j++){ if(i===j)continue; let d2=lnDist2(i,j); if(d2>=lo2&&d2<hi2) cand.push({j,d2}); } cand.sort((a,b)=>a.d2-b.d2);
+      for(let k=0;k<Math.min(C.unofficialLinks,cand.length);k++){ let j=cand[k].j, key=lnEk(i,j); if(seen.has(key))continue; seen.add(key); laneList.push(lnMk(i,j,false)); } } }
+  lnRegenPaths(); lnNeedsBuild=false;
+}
+function lnGenPath(seed){ let C=CFG.lanes; if(C.pathMode==='straight') return null;
+  let pts=[{t:0,d:0},{t:1,d:0}], h=seed>>>0, rnd=()=>{ h=(h*1664525+1013904223)>>>0; return h/4294967296*2-1; };
+  let iters=C.pathDetail|0, rough=C.pathRough*(C.pathMode==='road'?0.5:1);
+  for(let it=0;it<iters;it++){ let nx=[pts[0]]; for(let i=0;i<pts.length-1;i++){ let A=pts[i],B=pts[i+1]; nx.push({t:(A.t+B.t)/2,d:(A.d+B.d)/2+rnd()*rough*Math.pow(0.55,it)}); nx.push(B); } pts=nx; }
+  return pts; }
+function lnRegenPaths(){ for(const L of laneList) L.td=lnGenPath((L.a*131+L.b*977+(CFG.gen.seed|0)*31)>>>0); lnNeedsPath=false; }
+function lnColor(L,which){ let C=CFG.lanes;
+  if(C.colorMode==='multi') return which?L.col2:L.col;
+  if(C.colorMode==='type')  return L.official?C.offColor:C.unoColor;
+  if(C.colorMode==='tier')  return LANE_TIER_COLS[Math.max(galaxy[L.a].tier,galaxy[L.b].tier)-1];
+  return C.offColor; }
+function lnBeam(ax,ay,bx,by, laneOff, td, len0, ux,uy,nx,ny, col, st,w,op,glow,ef,cv){
+  let C=CFG.lanes, dc=drawingContext;
+  if(laneOff){ ax+=nx*laneOff; ay+=ny*laneOff; bx+=nx*laneOff; by+=ny*laneOff; }
+  let len=Math.hypot(bx-ax,by-ay); if(len<1) return;
+  let mx=(ax+bx)/2, my=(ay+by)/2, cpx=mx-uy*cv*len*0.12, cpy=my+ux*cv*len*0.12; dc.lineCap='round';
+  if(st==='taper'){ let Np=18; dc.setLineDash([]); dc.fillStyle=rgba(col,op);
+    let pt=t=>({x:(1-t)*(1-t)*ax+2*(1-t)*t*cpx+t*t*bx, y:(1-t)*(1-t)*ay+2*(1-t)*t*cpy+t*t*by});
+    let nrm=t=>{ let p=pt(Math.min(1,t+0.02)), q=pt(Math.max(0,t-0.02)), tx=p.x-q.x, ty=p.y-q.y, tl=Math.hypot(tx,ty)||1; return {x:-ty/tl,y:tx/tl}; };
+    dc.beginPath();
+    for(let i=0;i<=Np;i++){ let t=i/Np, ww=w*(0.35+1.4*Math.sin(Math.PI*t)), p=pt(t), n=nrm(t); if(i===0)dc.moveTo(p.x+n.x*ww,p.y+n.y*ww); else dc.lineTo(p.x+n.x*ww,p.y+n.y*ww); }
+    for(let i=Np;i>=0;i--){ let t=i/Np, ww=w*(0.35+1.4*Math.sin(Math.PI*t)), p=pt(t), n=nrm(t); dc.lineTo(p.x-n.x*ww,p.y-n.y*ww); }
+    dc.closePath(); dc.fill(); return; }
+  let build=()=>{ dc.beginPath();
+    if(!td){ dc.moveTo(ax,ay); dc.quadraticCurveTo(cpx,cpy,bx,by); return; }
+    let P=td.map(p=>({x:ax+ux*len*p.t+nx*p.d*len, y:ay+uy*len*p.t+ny*p.d*len})); dc.moveTo(P[0].x,P[0].y);
+    if(C.pathMode==='fractal'){ for(let i=1;i<P.length;i++) dc.lineTo(P[i].x,P[i].y); }
+    else { for(let i=1;i<P.length-1;i++){ let hx=(P[i].x+P[i+1].x)/2, hy=(P[i].y+P[i+1].y)/2; dc.quadraticCurveTo(P[i].x,P[i].y,hx,hy); } dc.lineTo(P[P.length-1].x,P[P.length-1].y); } };
+  if(st==='glow'){ dc.setLineDash([]); dc.strokeStyle=rgba(col,0.22*op); dc.lineWidth=Math.max(0.5,w*glow*2.2); build(); dc.stroke(); dc.strokeStyle=rgba(col,op); dc.lineWidth=w; build(); dc.stroke(); return; }
+  if(st==='dashed'){ dc.setLineDash([C.dashLen,C.dashGap]); if(C.flowDash){ let dir=(C.flowOppose&&laneOff<0)?-1:1; dc.lineDashOffset=-dir*(millis()*0.001)*40*C.animSpeed; } dc.strokeStyle=rgba(col,op); dc.lineWidth=w; build(); dc.stroke(); dc.setLineDash([]); dc.lineDashOffset=0; return; }
+  if(st==='solid'){ dc.setLineDash([]); dc.strokeStyle=rgba(col,op); dc.lineWidth=w; build(); dc.stroke(); return; }
+  dc.setLineDash([]); let g=dc.createLinearGradient(ax,ay,bx,by), f=Math.max(0.001,Math.min(0.49,ef)); g.addColorStop(0,rgba(col,0)); g.addColorStop(f,rgba(col,op)); g.addColorStop(1-f,rgba(col,op)); g.addColorStop(1,rgba(col,0)); dc.strokeStyle=g; dc.lineWidth=w; build(); dc.stroke();
+}
+function lnDrawOne(L, ax,ay,bx,by, z){
+  let C=CFG.lanes, o=L.official;
+  if(!o && C.unoBeamless) return;
+  let dx=bx-ax, dy=by-ay, len=Math.hypot(dx,dy); if(len<2) return; let ux=dx/len, uy=dy/len, nx=-uy, ny=ux;
+  let gap=(o?C.offEndGap:C.unoEndGap)*z; ax+=ux*gap; ay+=uy*gap; bx-=ux*gap; by-=uy*gap;
+  if(Math.hypot(bx-ax,by-ay)<2) return;
+  let st=o?C.offStyle:C.unoStyle, w=o?C.offW:C.unoW, op=(o?C.offOpacity:C.unoOpacity)*lnBreathe,
+      glow=o?C.offGlow:C.unoGlow, ef=o?C.offEndFade:C.unoEndFade, cv=o?C.offCurve:C.unoCurve,
+      td=(C.pathMode!=='straight')?L.td:null;
+  if(o?C.offTwoWay:C.unoTwoWay){ let off=(o?C.offLaneGap:C.unoLaneGap)*(0.6+0.8*L.r);
+    lnBeam(ax,ay,bx,by, off, td, len, ux,uy,nx,ny, lnColor(L,0), st,w,op,glow,ef,cv);
+    lnBeam(ax,ay,bx,by,-off, td, len, ux,uy,nx,ny, lnColor(L,1), st,w,op,glow,ef,cv);
+  } else lnBeam(ax,ay,bx,by, 0, td, len, ux,uy,nx,ny, lnColor(L,0), st,w,op,glow,ef,cv);
+}
+function drawLanes(){
+  let C=CFG.lanes; if(!C.on) return;
+  if(lnNeedsBuild) lnBuild(); else if(lnNeedsPath) lnRegenPaths();
+  lnBreathe = C.breathe ? (1 - C.breatheAmt*(0.5+0.5*Math.sin(millis()*0.001*C.breatheSpeed*2))) : 1;
+  let px=(PANELW+width)/2, py=height/2, z=cam.zoom, M=80;
+  push(); blendMode(ADD);
+  for(const L of laneList){ let A=galaxy[L.a], B=galaxy[L.b];
+    let ax=px+(cam.x+A.x)*z, ay=py+(cam.y+A.y)*z, bx=px+(cam.x+B.x)*z, by=py+(cam.y+B.y)*z;
+    if((ax<PANELW-M&&bx<PANELW-M)||(ax>width+M&&bx>width+M)||(ay<-M&&by<-M)||(ay>height+M&&by>height+M)) continue;   // cull off-screen
+    lnDrawOne(L, ax,ay,bx,by, z); }
+  pop(); blendMode(BLEND); drawingContext.setLineDash([]);
+}
 function drawGalaxyView(){
   background(4,5,9);
   drawBackdrop(true);                                       // parallax backdrop (deepest: far nebula/image)
   drawStars();                                              // starfield, per-layer parallax, in front of the backdrop
+  drawLanes();                                              // connection beams (screen-space, projected; under the systems)
   let playX=(PANELW+width)/2, playY=height/2, playW=width-PANELW;
   let hw=playW/(2*cam.zoom), hh=height/(2*cam.zoom);
   let vMinX=-cam.x-hw, vMaxX=-cam.x+hw, vMinY=-cam.y-hh, vMaxY=-cam.y+hh;   // visible world rect (cull)
@@ -530,7 +638,7 @@ function drawBackdrop(parallax){                                              //
   if(parallax && B.fadeOn) bd_fadeViewport();                                 // hides the backdrop edge cutoff, matched to the viewport aspect
   bdDirty=false;
 }
-function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); }       // radius change -> extent change -> re-bake
+function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); invalidateLanes(); }   // radius change -> extent change -> re-bake + relink
 function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); regenerate(); }
 function mouseDragged(){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; } }
 function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); return false; } }
@@ -545,7 +653,7 @@ function applySnapshot(c){                                  // merge a snapshot 
     if(c.view.preset && PRESETS[c.view.preset]) ACTIVE_PRESET=c.view.preset; }   // display only — never applyPreset (would clobber the loaded sun values)
 }
 function afterConfigChange(){                               // re-bake everything + sync the UI after a snapshot is applied
-  invalidateSunSprites(); invalidateBackdrop(); sfNeedGen=true; sfDirty=true;
+  invalidateSunSprites(); invalidateBackdrop(); sfNeedGen=true; sfDirty=true; lnNeedsBuild=true;
   let tag=document.getElementById('preset-tag'); if(tag) tag.textContent='· '+(PRESET_LABELS[ACTIVE_PRESET]||ACTIVE_PRESET);
   showPage();
 }
@@ -805,12 +913,46 @@ const BACKDROP_SCHEMA = [
   ['Parallax (galaxy view)', [['imgParallax','Image','range',0,1,0.01],['nebParallax','Nebula','range',0,1,0.01],['baseParallax','Base','range',0,1,0.01],['gridParallax','Grid','range',0,1,0.01]]],
   ['Bake includes (off = drawn live)', [['bake_base','Base','bool'],['bake_img','Image','bool'],['bake_neb','Nebula','bool'],['bake_grid','Grid','bool'],['bake_fade','Fade','bool']]]
 ];
+const LN_OPT_CONN =[['knn','K-nearest (tier)'],['threshold','All within range'],['mst','Spanning tree'],['gabriel','Gabriel web']];
+const LN_OPT_COLOR=[['multi','Multicolor'],['type','By type'],['tier','By tier'],['single','Single']];
+const LN_OPT_STYLE=[['gradient','Gradient (soft ends)'],['solid','Solid'],['glow','Glow + core'],['dashed','Dashed'],['taper','Taper spindle']];
+const LN_OPT_PATH =[['straight','Straight / curve'],['fractal','Fractal (jagged)'],['river','River (smooth)'],['road','Road (subtle)']];
+const LANES_SCHEMA = [
+  ['Lanes', [['on','Lanes on','bool'],['connMode','Strategy','select',LN_OPT_CONN],['officialDist','Official range','range',80,600,10],
+    ['tierLinkBase','Links base','range',1,8,1],['tierLinkMult','Links / tier','range',0,4,1]]],
+  ['Unofficial (long) lanes', [['unoOn','On','bool'],['unofficialMult','Range ×','range',1.2,3.5,0.05],['unofficialLinks','Links / sys','range',0,4,1],['unoBeamless','Beamless','bool']]],
+  ['Color', [['colorMode','Mode','select',LN_OPT_COLOR],['offColor','Official / single','color'],['unoColor','Unofficial','color']]],
+  ['Official style', [['offStyle','Style','select',LN_OPT_STYLE],['offW','Width','range',0.3,8,0.1],['offOpacity','Opacity','range',0,1,0.01],
+    ['offGlow','Glow','range',0,5,0.1],['offTwoWay','Two-way','bool'],['offLaneGap','Lane gap','range',0,14,0.5],
+    ['offEndGap','Node gap','range',0,50,1],['offEndFade','End fade','range',0,0.49,0.01],['offCurve','Curve','range',-2,2,0.05]]],
+  ['Unofficial style', [['unoStyle','Style','select',LN_OPT_STYLE],['unoTwoWay','Two-way','bool'],['unoW','Width','range',0.3,8,0.1],
+    ['unoOpacity','Opacity','range',0,1,0.01],['unoGlow','Glow','range',0,5,0.1],['unoLaneGap','Lane gap','range',0,14,0.5],
+    ['unoEndGap','Node gap','range',0,50,1],['unoEndFade','End fade','range',0,0.49,0.01],['unoCurve','Curve','range',-2,2,0.05]]],
+  ['Path shape', [['pathMode','Path','select',LN_OPT_PATH],['pathRough','Roughness','range',0,0.6,0.01],['pathDetail','Detail','range',1,6,1]]],
+  ['Dash & animation', [['dashLen','Dash len','range',1,30,1],['dashGap','Dash gap','range',1,30,1],['flowDash','Flow dashes','bool'],
+    ['flowOppose','2-way opposite','bool'],['breathe','Breathe','bool'],['breatheSpeed','Breathe spd','range',0.1,3,0.05],
+    ['breatheAmt','Breathe amt','range',0,1,0.01],['animSpeed','Anim speed','range',-3,3,0.05]]]
+];
+const LN_BUILD_KEYS=new Set(['connMode','officialDist','tierLinkBase','tierLinkMult','unoOn','unofficialMult','unofficialLinks']);
+const LN_PATH_KEYS =new Set(['pathMode','pathRough','pathDetail']);
+function onLaneChange(key){ if(LN_BUILD_KEYS.has(key)) lnNeedsBuild=true; else if(LN_PATH_KEYS.has(key)) lnNeedsPath=true; }
+const LANE_PRESETS = {
+  galaxy01:  {name:'galaxy_01 multicolor', ov:{connMode:'knn',colorMode:'multi',offStyle:'gradient',offW:1.8,offOpacity:0.85,offGlow:2.2,offTwoWay:true,offLaneGap:4,offEndGap:14,offEndFade:0.15,offCurve:0,unoOn:true,unoBeamless:true,pathMode:'straight'}},
+  economy:   {name:'IE economy (blue/red)', ov:{connMode:'knn',colorMode:'type',offColor:[100,150,255],unoColor:[255,60,60],offStyle:'gradient',offW:2.4,offOpacity:0.8,offTwoWay:false,unoOn:true,unoBeamless:false,unoStyle:'solid',unoW:1,unoOpacity:0.3,pathMode:'straight'}},
+  neon:      {name:'neon glow', ov:{colorMode:'single',offColor:[120,240,255],offStyle:'glow',offGlow:3,offW:2,offOpacity:0.9,offTwoWay:false,unoOn:true,unoBeamless:false,unoStyle:'glow',unoOpacity:0.35,pathMode:'straight'}},
+  mst:       {name:'MST backbone', ov:{connMode:'mst',colorMode:'single',offColor:[160,200,255],offStyle:'solid',offW:1.4,offOpacity:0.75,offTwoWay:false,unoOn:false,pathMode:'straight'}},
+  web:       {name:'Gabriel web', ov:{connMode:'gabriel',colorMode:'tier',offStyle:'gradient',offW:1.4,offOpacity:0.6,offTwoWay:false,unoOn:false,pathMode:'straight'}},
+  rivers:    {name:'rivers', ov:{connMode:'mst',colorMode:'single',offColor:[90,175,235],offStyle:'gradient',offW:2.6,offOpacity:0.7,offTwoWay:false,offEndGap:12,offEndFade:0.1,unoOn:false,pathMode:'river',pathRough:0.26,pathDetail:4}},
+  lightning: {name:'lightning', ov:{connMode:'knn',colorMode:'single',offColor:[150,220,255],offStyle:'glow',offGlow:2.4,offW:1.4,offOpacity:0.9,offTwoWay:false,offEndGap:10,unoOn:false,pathMode:'fractal',pathRough:0.3,pathDetail:5}}
+};
+let lnPreset='galaxy01';
+function applyLanePreset(name){ let p=LANE_PRESETS[name]; if(!p)return; lnPreset=name; Object.assign(CFG.lanes, JSON.parse(JSON.stringify(p.ov))); lnNeedsBuild=true; showPage(); }
 const PAGES = [
   { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true, onChange: invalidateSunSprites },
   { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: regenerate },
   { id:'backdrop', label:'Backdrop',   schema: BACKDROP_SCHEMA, target: ()=>CFG.backdrop, onChange: invalidateBackdrop },
   { id:'stars',    label:'Stars',      schema: [], target: ()=>CFG.stars, custom:'stars' },
-  { id:'lanes',    label:'Lanes',      schema: [],         target: ()=>CFG.lanes },
+  { id:'lanes',    label:'Lanes',      schema: LANES_SCHEMA, target: ()=>CFG.lanes, lanePresets:true, onChange: onLaneChange },
   { id:'traffic',  label:'Traffic',    schema: [],         target: ()=>CFG.traffic },
   { id:'economy',  label:'Economy',    schema: [],         target: ()=>CFG.economy }
 ];
@@ -832,6 +974,7 @@ function showPage(){
   let body=document.getElementById('pagebody'); body.innerHTML=''; controls={}; presetSel=null;
   let page=PAGES.find(p=>p.id===activePage);
   if(page.presets) buildPresetRow(body);
+  if(page.lanePresets) buildLanePresetRow(body);
   if(page.custom==='stars'){ buildStarsPanel(body); return; }
   if(!page.schema.length){
     let note=document.createElement('div'); note.className='hint';
@@ -859,6 +1002,15 @@ function buildPresetRow(body){
   pr.appendChild(presetSel); body.appendChild(pr);
   let ph=document.createElement('div'); ph.className='hint'; ph.style.margin='2px 0 4px'; ph.textContent='pick a sun version, or press [ / ] to cycle'; body.appendChild(ph);
 }
+function buildLanePresetRow(body){
+  let pr=document.createElement('div'); pr.className='row';
+  let pl=document.createElement('span'); pl.className='lab'; pl.textContent='Preset'; pr.appendChild(pl);
+  let sel=document.createElement('select');
+  for(const k of Object.keys(LANE_PRESETS)){ let o=document.createElement('option'); o.value=k; o.textContent=LANE_PRESETS[k].name; sel.appendChild(o); }
+  sel.value=lnPreset; sel.onchange=()=>applyLanePreset(sel.value);
+  pr.appendChild(sel); body.appendChild(pr);
+  let ph=document.createElement('div'); ph.className='hint'; ph.style.margin='2px 0 4px'; ph.textContent='lane look presets — nodes are the galaxy systems'; body.appendChild(ph);
+}
 function buildControls(schema, target, body, onChange){
   for(const [group, items] of schema){
     let h=document.createElement('div'); h.className='grp'; h.textContent=group; body.appendChild(h);
@@ -868,17 +1020,17 @@ function buildControls(schema, target, body, onChange){
       let lab=document.createElement('span'); lab.className='lab'; lab.textContent=label; row.appendChild(lab);
       if(type==='bool'){
         let inp=document.createElement('input'); inp.type='checkbox'; inp.checked=!!target[key];
-        inp.oninput=()=>{ target[key]=inp.checked; if(onChange) onChange(); }; row.appendChild(inp);
+        inp.oninput=()=>{ target[key]=inp.checked; if(onChange) onChange(key); }; row.appendChild(inp);
         controls[key]={type, input:inp};
       } else if(type==='range'){
         let inp=document.createElement('input'); inp.type='range'; inp.min=item[3]; inp.max=item[4]; inp.step=item[5]; inp.value=target[key];
         let val=document.createElement('span'); val.className='val'; val.textContent=target[key];
-        inp.oninput=()=>{ target[key]=parseFloat(inp.value); val.textContent=inp.value; if(onChange) onChange(); };
+        inp.oninput=()=>{ target[key]=parseFloat(inp.value); val.textContent=inp.value; if(onChange) onChange(key); };
         row.appendChild(inp); row.appendChild(val);
         controls[key]={type, input:inp, val};
       } else if(type==='color'){
         let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(target[key]);
-        inp.oninput=()=>{ target[key]=hexToRgb(inp.value); if(onChange) onChange(); }; row.appendChild(inp);
+        inp.oninput=()=>{ target[key]=hexToRgb(inp.value); if(onChange) onChange(key); }; row.appendChild(inp);
         controls[key]={type, input:inp};
       } else if(type==='select'){
         let inp=document.createElement('select'); let opts=item[3]||[];
@@ -886,7 +1038,7 @@ function buildControls(schema, target, body, onChange){
         inp.value=target[key];
         inp.oninput=()=>{ let v=inp.value; target[key]=(/^-?\d+$/.test(v)?parseInt(v):v);
           if(key==='imgIndex' && !target.imgOn){ target.imgOn=true; if(controls.imgOn) controls.imgOn.input.checked=true; }   // picking a photo turns the Image layer on
-          if(onChange) onChange(); }; row.appendChild(inp);
+          if(onChange) onChange(key); }; row.appendChild(inp);
         controls[key]={type, input:inp};
       }
       body.appendChild(row);
