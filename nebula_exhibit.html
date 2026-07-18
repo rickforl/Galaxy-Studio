@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Nebula Exhibit</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#05060a;font-family:'Consolas','Monaco',monospace;}
+  #topbar{position:fixed;top:0;left:0;right:0;height:31px;display:flex;align-items:center;gap:8px;padding:0 10px;
+    background:rgba(6,10,16,0.96);border-bottom:1px solid #2a3a58;z-index:20;box-sizing:border-box;}
+  #topbar .ttl{color:#c79fe0;font-weight:bold;letter-spacing:1px;font-size:12px;}
+  .pill{background:#20163b;color:#c79fe8;border:1px solid #5a3a8c;border-radius:9px;padding:1px 9px;font:10px 'Consolas',monospace;font-weight:bold;letter-spacing:.5px;}
+  #topbar button{background:#20163b;color:#e0cdef;border:1px solid #5a3a8c;font:11px 'Consolas',monospace;padding:3px 10px;cursor:pointer;}
+  #topbar button:hover{background:#2d1e4d;}
+  #baketime{margin-left:auto;color:#8fe0c8;font:11px 'Consolas',monospace;}
+  #panel{position:fixed;top:31px;left:0;width:250px;max-height:calc(100vh - 31px);overflow-y:auto;
+    background:rgba(10,8,20,0.92);border-right:1px solid #3a2a58;padding:8px 10px 40px;
+    color:#c8b9e4;font:11px 'Consolas',monospace;z-index:10;box-sizing:border-box;}
+  #panel .grp{color:#b08fe0;font-weight:bold;letter-spacing:.5px;margin:10px 0 4px;border-bottom:1px solid #2a2340;padding-bottom:2px;}
+  #panel .row{display:flex;align-items:center;gap:6px;margin:3px 0;}
+  #panel .lab{width:78px;flex:none;color:#a89bc4;}
+  #panel .row input[type=range]{flex:1;min-width:0;}
+  #panel .val{width:34px;text-align:right;color:#d8c8f0;}
+  #panel .hint{color:#6a6088;margin-top:8px;line-height:1.4;}
+  .act-btn{width:100%;background:#241a40;color:#e0cdef;border:1px solid #5a3a8c;font:11px 'Consolas',monospace;padding:5px;margin-top:8px;cursor:pointer;}
+  .act-btn:hover{background:#2d1e4d;}
+</style>
+</head><body>
+<div id="topbar">
+  <span class="ttl">NEBULA EXHIBIT</span>
+  <span class="pill" id="build-pill">neb_v0.1</span>
+  <button id="play-btn">&#9654; Play</button>
+  <button id="reseed-btn">Reseed</button>
+  <span id="baketime">—</span>
+</div>
+<div id="panel"></div>
+<script>
+const BUILD_DATE='20260717', BUILD_SEQ='05', BUILD_ID='neb_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+
+// ---------- global nebula params (shared across all 9 cells for apples-to-apples compare) ----------
+let N = {
+  seed: 1234, scale: 4.0, octaves: 5, warp: 1.2, contrast: 1.4, intensity: 1.3, threshold: 0.15, animSpeed: 1.0,
+  colA: [20,12,55], colB: [150,45,120], colC: [245,215,185], bg: [4,5,10]
+};
+const SCHEMA = [
+  ['Field', [['seed','Seed','range',0,9999,1],['scale','Scale','range',1,12,0.1],['octaves','Octaves','range',1,7,1],
+    ['warp','Warp amt','range',0,3,0.05]]],
+  ['Tone', [['contrast','Contrast','range',0.4,3,0.05],['intensity','Intensity','range',0.2,3,0.05],['threshold','Threshold','range',0,0.8,0.01]]],
+  ['Palette', [['colA','Color A','color'],['colB','Color B','color'],['colC','Color C','color'],['bg','Background','color']]],
+  ['Motion', [['animSpeed','Speed','range',0,4,0.05]]]
+];
+
+// ---------- noise primitives ----------
+function hash(i){ let s=Math.sin(i*127.1 + N.seed*311.7)*43758.5453; return s-Math.floor(s); }
+function smoothstep(a,b,x){ let t=constrain((x-a)/(b-a),0,1); return t*t*(3-2*t); }
+function fbm(x,y,oct){ let a=0.5,f=1,sum=0,norm=0,oc=Math.min(oct,octCap); for(let o=0;o<oc;o++){ sum+=a*noise(x*f,y*f,T); norm+=a; a*=0.5; f*=2; } return sum/norm; }
+function ridged(x,y,oct){ let a=0.5,f=1,sum=0,norm=0,oc=Math.min(oct,octCap); for(let o=0;o<oc;o++){ let n=1-Math.abs(2*noise(x*f,y*f,T)-1); n*=n; sum+=a*n; norm+=a; a*=0.5; f*=2; } return sum/norm; }
+function turb(x,y,oct){ let a=0.5,f=1,sum=0,norm=0,oc=Math.min(oct,octCap); for(let o=0;o<oc;o++){ sum+=a*Math.abs(2*noise(x*f,y*f,T)-1); norm+=a; a*=0.5; f*=2; } return sum/norm; }
+function warpField(x,y){ let q1=fbm(x+1.7,y+9.2,N.octaves), q2=fbm(x+5.2,y+1.3,N.octaves); return fbm(x+N.warp*q1, y+N.warp*q2, N.octaves); }
+function blobField(x,y){                       // seeded soft gaussian blobs (the current backdrop approach = baseline)
+  let n=9, v=0;
+  for(let i=0;i<n;i++){
+    let bx=hash(i*3+1)*N.scale + Math.sin(T*0.8+i*1.7)*N.scale*0.13, by=hash(i*3+2)*N.scale + Math.cos(T*0.6+i*2.3)*N.scale*0.13, br=(0.35+0.55*hash(i*3+3))*(N.scale*0.28);
+    let dx=x-bx, dy=y-by; v += Math.exp(-(dx*dx+dy*dy)/(2*br*br));
+  }
+  return Math.min(1,v);
+}
+function worley(x,y){                            // cellular F1 (bright near feature points)
+  let cx=Math.floor(x), cy=Math.floor(y), md=9;
+  for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++){
+    let gx=cx+i, gy=cy+j, px=gx+hash(gx*7.1+gy*131.7+1)+0.3*Math.sin(T*0.9+gx*1.3+gy*0.7), py=gy+hash(gx*13.3+gy*57.9+2)+0.3*Math.cos(T*0.8+gy*1.1+gx*0.5);
+    let dx=px-x, dy=py-y, d=Math.sqrt(dx*dx+dy*dy); if(d<md) md=d;
+  }
+  return constrain(1-md,0,1);
+}
+
+// ---------- the 9 approaches ----------
+const TECHS = [
+  {name:'Radial blobs',  fn:(x,y)=>blobField(x,y)},
+  {name:'Perlin field',  fn:(x,y)=>noise(x,y,T)},
+  {name:'fBm clouds',    fn:(x,y)=>fbm(x,y,N.octaves)},
+  {name:'Domain warp',   fn:(x,y)=>warpField(x,y)},
+  {name:'Ridged veins',  fn:(x,y)=>ridged(x,y,N.octaves)},
+  {name:'Turbulence',    fn:(x,y)=>turb(x,y,N.octaves)},
+  {name:'Worley cells',  fn:(x,y)=>worley(x,y)},
+  {name:'Blobs × fBm',   fn:(x,y)=>blobField(x,y)*(0.4+0.6*fbm(x*1.4,y*1.4,3))},
+  {name:'Emission+dust', fn:(x,y)=>constrain(fbm(x,y,N.octaves)-0.7*Math.max(0,fbm(x+11,y+7,3)-0.45),0,1)}
+];
+
+function palette(t){
+  t=constrain(t,0,1);
+  if(t<0.5){ let u=t*2; return [lerp(N.colA[0],N.colB[0],u),lerp(N.colA[1],N.colB[1],u),lerp(N.colA[2],N.colB[2],u)]; }
+  let u=(t-0.5)*2; return [lerp(N.colB[0],N.colC[0],u),lerp(N.colB[1],N.colC[1],u),lerp(N.colB[2],N.colC[2],u)];
+}
+
+// ---------- baking ----------
+const CELL_RES=176, BIG_RES=560, ANIM_RES=40, ANIM_BIG=130, PANELW=250, TOPH=31, GAP=10;
+let cellBufs=[], bigBuf=null, expanded=-1, needsBake=true, lastBakeMs=0, lastChangeMs=0;
+let T=0, animOn=new Array(9).fill(false), cellBakeMs=new Array(9).fill(0), animBufs=[], animBig=null, octCap=9;   // per-cell animation + isolated bake timing
+function bakeInto(g, res, tech){
+  noiseSeed(N.seed);                              // same underlying field across techniques for a fair compare
+  g.loadPixels();
+  let S=N.scale, bg=N.bg, C=N.contrast, I=N.intensity, th=N.threshold, px=g.pixels;
+  for(let yy=0;yy<res;yy++){
+    for(let xx=0;xx<res;xx++){
+      let f=tech.fn((xx/res)*S,(yy/res)*S);
+      let v=Math.pow(constrain(f,0,1),C);
+      let a=smoothstep(th,1,v)*I, col=palette(v), o=4*(yy*res+xx);
+      px[o]  =Math.min(255,bg[0]+col[0]*a);
+      px[o+1]=Math.min(255,bg[1]+col[1]*a);
+      px[o+2]=Math.min(255,bg[2]+col[2]*a);
+      px[o+3]=255;
+    }
+  }
+  g.updatePixels();
+}
+function bakeAll(){
+  let t0=millis();
+  for(let i=0;i<TECHS.length;i++){
+    if(!cellBufs[i]){ cellBufs[i]=createGraphics(CELL_RES,CELL_RES); cellBufs[i].pixelDensity(1); }
+    bakeInto(cellBufs[i], CELL_RES, TECHS[i]);
+  }
+  if(expanded>=0){ if(!bigBuf){ bigBuf=createGraphics(BIG_RES,BIG_RES); bigBuf.pixelDensity(1);} bakeInto(bigBuf, BIG_RES, TECHS[expanded]); }
+  lastBakeMs=Math.round(millis()-t0);
+  document.getElementById('baketime').textContent='baked 9 in '+lastBakeMs+' ms  ·  '+BUILD_ID;
+}
+
+// ---------- layout + draw ----------
+function cellRect(i){
+  let availW=width-PANELW-GAP*4, availH=height-TOPH-GAP*4, cs=Math.min(availW/3, availH/3);
+  let r=Math.floor(i/3), c=i%3;
+  return { x: PANELW+GAP*2 + c*(cs+GAP), y: TOPH+GAP*2 + r*(cs+GAP), cs };
+}
+function setup(){ pixelDensity(1); createCanvas(windowWidth, windowHeight); buildPanel(); }
+function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
+function draw(){
+  if(needsBake && millis()-lastChangeMs>80){ octCap=9; bakeAll(); needsBake=false; }   // crisp full-res static bake (frozen cells)
+  let anyAnim = animOn.some(Boolean);
+  if(anyAnim) T += N.animSpeed*0.008;                                          // advance time only while something animates
+  octCap=3;                                                                    // per-cell anim bakes run at reduced detail
+  background(N.bg[0],N.bg[1],N.bg[2]);
+  if(expanded>=0){                                 // fullscreen inspection of one technique
+    let s=Math.min(width-PANELW-GAP*4, height-TOPH-GAP*4);
+    let x=PANELW+(width-PANELW-s)/2, y=TOPH+(height-TOPH-s)/2, big=bigBuf;
+    if(animOn[expanded]){ if(!animBig){ animBig=createGraphics(ANIM_BIG,ANIM_BIG); animBig.pixelDensity(1); } bakeInto(animBig, ANIM_BIG, TECHS[expanded]); big=animBig; }
+    image(big, x, y, s, s);
+    noFill(); stroke(90,60,140); rect(x,y,s,s);
+    noStroke(); fill(0,0,0,160); rect(x,y+s-22,s,22);
+    fill(220,205,245); textSize(13); textAlign(LEFT,CENTER);
+    text((expanded+1)+'. '+TECHS[expanded].name+(animOn[expanded]?'  ▶ '+Math.round(frameRate())+' fps':'')+'   — click to close', x+8, y+s-11);
+    updateTop(anyAnim); return;
+  }
+  for(let i=0;i<9;i++){
+    let R=cellRect(i), buf=cellBufs[i];
+    if(animOn[i]){
+      if(!animBufs[i]){ animBufs[i]=createGraphics(ANIM_RES,ANIM_RES); animBufs[i].pixelDensity(1); }
+      let t0=performance.now(); bakeInto(animBufs[i], ANIM_RES, TECHS[i]); cellBakeMs[i]=performance.now()-t0;   // isolated per-cell cost
+      buf=animBufs[i];
+    }
+    image(buf, R.x, R.y, R.cs, R.cs);
+    noStroke(); fill(0,0,0,150); rect(R.x, R.y+R.cs-16, R.cs, 16);
+    fill(205,192,235); textSize(11); textAlign(LEFT,CENTER); text((i+1)+'. '+TECHS[i].name, R.x+6, R.y+R.cs-8);
+    if(animOn[i] && cellBakeMs[i]>0){ textAlign(RIGHT,CENTER); fill(150,225,185); text('≈'+Math.round(1000/cellBakeMs[i])+' fps', R.x+R.cs-6, R.y+R.cs-8); }
+    // per-cell animate toggle dot (top-left)
+    noStroke();
+    if(animOn[i]){ fill(90,225,145); circle(R.x+12, R.y+12, 13); }
+    else { fill(34,30,52); circle(R.x+12, R.y+12, 13); noFill(); stroke(120,110,152); strokeWeight(1); circle(R.x+12, R.y+12, 13); }
+    noFill(); stroke(animOn[i]?color(70,125,98):color(48,38,72)); strokeWeight(1); rect(R.x, R.y, R.cs, R.cs);
+  }
+  updateTop(anyAnim);
+}
+function updateTop(anyAnim){
+  document.getElementById('baketime').textContent = anyAnim ? ('▶ '+Math.round(frameRate())+' fps loop  ·  '+BUILD_ID) : ('static · baked in '+lastBakeMs+' ms  ·  '+BUILD_ID);
+  document.getElementById('play-btn').innerHTML = anyAnim ? '&#9632; Freeze all' : '&#9654; Animate all';
+}
+function mousePressed(){
+  if(mouseX<PANELW) return;
+  if(expanded>=0){ expanded=-1; return; }
+  for(let i=0;i<9;i++){ let R=cellRect(i);
+    if(mouseX>=R.x&&mouseX<=R.x+R.cs&&mouseY>=R.y&&mouseY<=R.y+R.cs){
+      if(mouseX<=R.x+26 && mouseY<=R.y+24){ toggleCell(i); return; }     // corner dot -> animate just this cell
+      expanded=i; needsBake=true; lastChangeMs=0; return;                // elsewhere -> inspect large
+    }
+  }
+}
+function toggleCell(i){ animOn[i]=!animOn[i]; if(!animOn[i]){ needsBake=true; lastChangeMs=0; } }   // freeze -> crisp re-bake at current frame
+
+// ---------- controls ----------
+function rgbToHex(c){ return '#'+[0,1,2].map(i=>('0'+(c[i]|0).toString(16)).slice(-2)).join(''); }
+function hexToRgb(h){ return [parseInt(h.substr(1,2),16),parseInt(h.substr(3,2),16),parseInt(h.substr(5,2),16)]; }
+let ctrls={};
+function buildPanel(){
+  let panel=document.getElementById('panel'); panel.innerHTML=''; ctrls={};
+  for(const [group,items] of SCHEMA){
+    let h=document.createElement('div'); h.className='grp'; h.textContent=group; panel.appendChild(h);
+    for(const it of items){
+      let [key,label,type]=it, row=document.createElement('div'); row.className='row';
+      let lab=document.createElement('span'); lab.className='lab'; lab.textContent=label; row.appendChild(lab);
+      if(type==='range'){
+        let inp=document.createElement('input'); inp.type='range'; inp.min=it[3]; inp.max=it[4]; inp.step=it[5]; inp.value=N[key];
+        let val=document.createElement('span'); val.className='val'; val.textContent=N[key];
+        inp.oninput=()=>{ N[key]=parseFloat(inp.value); val.textContent=inp.value; needsBake=true; lastChangeMs=millis(); };
+        row.appendChild(inp); row.appendChild(val); ctrls[key]={inp,val};
+      } else if(type==='color'){
+        let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(N[key]);
+        inp.oninput=()=>{ N[key]=hexToRgb(inp.value); needsBake=true; lastChangeMs=millis(); }; row.appendChild(inp); ctrls[key]={inp};
+      }
+      panel.appendChild(row);
+    }
+  }
+  let hint=document.createElement('div'); hint.className='hint';
+  hint.textContent='Corner dot = animate just that cell (shows its own ≈fps in isolation). Click a cell body to inspect it large. Animate all / Freeze all + Speed up top. All 9 share the same params + seed. Reseed rerolls the field.';
+  panel.appendChild(hint);
+}
+function reseed(){ N.seed=Math.floor(Math.random()*9999); if(ctrls.seed){ ctrls.seed.inp.value=N.seed; ctrls.seed.val.textContent=N.seed; } needsBake=true; lastChangeMs=0; }
+function togglePlay(){ let target=!animOn.some(Boolean);   // master: animate all / freeze all
+  for(let i=0;i<9;i++) animOn[i]=target;
+  if(!target){ needsBake=true; lastChangeMs=0; } }
+window.addEventListener('load',()=>{ document.getElementById('build-pill').textContent=BUILD_ID; document.getElementById('reseed-btn').onclick=reseed; document.getElementById('play-btn').onclick=togglePlay; });
+</script>
+</body></html>
