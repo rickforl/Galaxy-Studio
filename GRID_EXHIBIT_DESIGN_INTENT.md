@@ -6,8 +6,10 @@ decisions*, not implementation detail (read `grid_exhibit.html` for the running
 model). Status tags: **[BUILT]** in the exhibit · **[DECIDED]** agreed, not yet
 canonical · **[TBD]** open.
 
-**Anchor:** `grid_v0.1_20260718.04` — square/polar/hex grids · cell + line labelling ·
-per-axis invert · line numbering + subdivisions.
+**Anchor:** `grid_v0.1_20260718.06` — square/polar/hex grids · cell + line labelling ·
+per-axis invert · line numbering + subdivisions · label placement (anchor / offset /
+polar 0° orientation / spoke-line vs midpoint) · radial labels (letters / degrees /
+magnetic bearings).
 
 ## Why this exists
 
@@ -78,6 +80,46 @@ graph axes.
 independently, for all edge-anchored modes (sectors, index, line numbers). Lets the
 frame match whatever convention the final galaxy wants (Y-up vs Y-down, which corner is
 `A1`) without touching world space.
+
+## Label placement **[BUILT]**
+
+Where a label sits is its own axis of control, separate from what it says:
+
+- **Cell anchor** — a 9-position grid (centre · edges · corners) for square
+  sector/index labels, with edge padding so text doesn't collide with grid lines. Lets
+  a coordinate read as a centred cell name or as a corner tick.
+- **Offset X / Y** — a universal pixel nudge folded into the one `label()` helper, so it
+  shifts *every* label (square, polar, line numbers, world coords) together. The literal
+  "nudge everything a few px" knob.
+- **Polar 0°** — which compass direction the 0° spoke (and sector A) points: East /
+  North / West / South, composing with the fine `Angle offset`. This is the *frame
+  orientation* — the degree/bearing readouts follow it, so `0°` / `000` always lands
+  where 0° points.
+- **Polar labels: on spoke line vs wedge midpoint** — label the spoke itself (a
+  boundary) or the centre of the wedge between spokes (the actual sector). Sector letters
+  read more naturally at midpoints; bearings read more naturally on the line.
+
+Rationale: the future coordinate system has to make deliberate choices about label
+convention (which corner, which direction is "up", spoke vs sector). Keeping placement
+independent from content lets us audition every combination before committing.
+
+## Radial labels — letters vs bearings **[BUILT]**
+
+The polar spokes can be labelled three ways (`Radial labels`), because a radial frame
+answers to two different mental models:
+
+| Mode | Reads as | For |
+|---|---|---|
+| **Letters (A,B,C)** | sector names around the wheel | naming / addressing |
+| **Degrees** | `045°` — angle *from the 0° direction* (relative) | geometry readout |
+| **Magnetic radials** | `045` — 3-digit compass bearing, CW from North (absolute) | navigation / "fly the 270 radial" |
+
+**Magnetic** is the navigation convention: bearing = `(screen-angle + 90°) mod 360`, so
+North = `000`, East = `090`, South = `180`, West = `270` — independent of where the 0°
+spoke is pointed (it reads the spoke's *actual* direction, not its index). The two degree
+modes are kept visually distinct on purpose: `045°` (relative, suffixed) vs `045`
+(absolute, 3-digit). The **Radar** preset ships as magnetic + North-up so it behaves like
+a real compass scope.
 
 ## Context layer **[BUILT]**
 
