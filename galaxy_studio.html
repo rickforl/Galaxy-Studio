@@ -64,7 +64,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '45';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '46';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -722,8 +722,8 @@ function bd_base(P,E,B){
   P.rect(0,0,2*E,2*E); P.pop();
 }
 // ---- procedural noise nebula (domain-warp / fBm / emission), rendered once to a texture, stepped over time ----
-const NEB_RES=176;
-let nebCur=null, nebNext=null, nebBlendTex=null, nbCurPx=null, nbNextPx=null, nebT=0, nebTnext=0, nbRenderT=0, nebFadeAmt=0, nebFading=false, nebFadeStart=0, lastNebStep=0, lastNebStaticSig='';
+const NEB_RES=176, NEB_CHUNK=16;   // NEB_CHUNK = rows rendered per frame during an animation build (spreads the ~140ms field render so no frame spikes)
+let nebCur=null, nebNext=null, nebBlendTex=null, nbCurPx=null, nbNextPx=null, nebT=0, nebTnext=0, nbRenderT=0, nebFadeAmt=0, nebFading=false, nebFadeStart=0, lastNebStep=0, lastNebStaticSig='', nebBuilding=false, nebBuildRow=0;
 function nbSmooth(a,b,x){ let t=constrain((x-a)/(b-a),0,1); return t*t*(3-2*t); }
 function nbFbm(x,y,oct){ let a=0.5,f=1,s=0,n=0; for(let o=0;o<oct;o++){ s+=a*noise(x*f,y*f,nbRenderT); n+=a; a*=0.5; f*=2; } return s/n; }
 function nbWarp(x,y,oct,w){ let q1=nbFbm(x+1.7,y+9.2,oct), q2=nbFbm(x+5.2,y+1.3,oct); return nbFbm(x+w*q1, y+w*q2, oct); }
@@ -738,18 +738,19 @@ function nbPalette(t,B){ t=constrain(t,0,1);
 }
 function nebSigStatic(B){ return [B.nebType,B.nebScale,B.nebOctaves,B.nebWarp,B.nebContrast,B.nebThreshold,B.nebOpacity,B.nebSeed,
   B.nebColorA.join(','),B.nebColorB.join(','),B.nebColorC.join(',')].join('|'); }                                 // params only, not time
-function renderNebInto(tex, tval, B){                                          // pixel-fill the field at time tval (expensive; once per step or param change)
+function renderNebRows(tex, tval, B, y0, y1){                                   // fill rows [y0,y1) of the field; chunked so a build can span frames (no single-frame spike)
   if(!tex) return;
   nbRenderT=tval; noiseSeed(B.nebSeed|0);
-  tex.clear(); tex.loadPixels();
+  if(y0===0){ tex.clear(); tex.loadPixels(); }
   let R=NEB_RES, S=B.nebScale*4, C=B.nebContrast, th=B.nebThreshold, op=B.nebOpacity, px=tex.pixels;
-  for(let yy=0;yy<R;yy++) for(let xx=0;xx<R;xx++){
+  for(let yy=y0;yy<y1;yy++) for(let xx=0;xx<R;xx++){
     let v=Math.pow(constrain(nbField((xx/R)*S,(yy/R)*S,B),0,1), C);
     let a=nbSmooth(th,1,v)*op, col=nbPalette(v,B), o=4*(yy*R+xx);
     px[o]=col[0]|0; px[o+1]=col[1]|0; px[o+2]=col[2]|0; px[o+3]=Math.min(255,a*255)|0;
   }
-  tex.updatePixels();
+  if(y1>=R) tex.updatePixels();
 }
+function renderNebInto(tex, tval, B){ renderNebRows(tex, tval, B, 0, NEB_RES); }   // full render in one shot (initial / param change)
 function ensureNeb(B){                                                         // lazily create the textures; re-render on a parameter change
   if(!nebCur){ nebCur=createGraphics(NEB_RES,NEB_RES); nebCur.pixelDensity(1); nebNext=createGraphics(NEB_RES,NEB_RES); nebNext.pixelDensity(1);
     nebBlendTex=createGraphics(NEB_RES,NEB_RES); nebBlendTex.pixelDensity(1); nebBlendTex.loadPixels();
@@ -768,15 +769,19 @@ function nbDrawTex(P,E,B){                                                     /
   if(nebFading && nebFadeAmt>0){ lerpNebPixels(constrain(nebFadeAmt,0,1)); tex=nebBlendTex; }
   P.push(); P.imageMode(CENTER); P.image(tex, 0,0, 2*E, 2*E); P.pop();
 }
-function stepNebula(B){                                                        // per-frame: hold for Interval, then crossfade one Step over Blend seconds
-  if(!(B.nebOn && B.nebAnimOn && B.nebType!=='blobs')){ nebFading=false; return; }
+function stepNebula(B){                                                        // per-frame: hold for Interval, incrementally render the next frame, then crossfade over Blend
+  if(!(B.nebOn && B.nebAnimOn && B.nebType!=='blobs')){ nebFading=false; nebBuilding=false; return; }
+  if(nebBuilding){                                                             // spread the ~140ms field render across frames -> no single frame spikes
+    let y1=Math.min(NEB_RES, nebBuildRow+NEB_CHUNK);
+    renderNebRows(nebNext, nebTnext, B, nebBuildRow, y1); nebBuildRow=y1;
+    if(nebBuildRow>=NEB_RES){ nebBuilding=false; nebCur.loadPixels(); nebNext.loadPixels(); nbCurPx=nebCur.pixels; nbNextPx=nebNext.pixels; nebFadeAmt=0; nebFadeStart=millis(); nebFading=true; }   // done -> start the dissolve
+    return;
+  }
   if(nebFading){
     nebFadeAmt = B.nebBlend>0 ? (millis()-nebFadeStart)/(B.nebBlend*1000) : 1;
     if(nebFadeAmt>=1){ let tmp=nebCur; nebCur=nebNext; nebNext=tmp; nebT=nebTnext; nebFadeAmt=0; nebFading=false; lastNebStep=millis(); invalidateBackdrop(); }
-  } else if(nebCur && millis()-lastNebStep > B.nebInterval*1000 && millis()-lastInteract > 300){   // drag limiter: don't fire the ~140ms nebula re-render mid pan/zoom — wait until interaction pauses
-    nebTnext=nebT+B.nebStep; renderNebInto(nebNext, nebTnext, B);                // render the next frame...
-    nebCur.loadPixels(); nebNext.loadPixels(); nbCurPx=nebCur.pixels; nbNextPx=nebNext.pixels;   // ...cache both for the dissolve
-    nebFadeAmt=0; nebFadeStart=millis(); nebFading=true;
+  } else if(nebCur && millis()-lastNebStep > B.nebInterval*1000 && millis()-lastInteract > 300){   // due, and not mid pan/zoom (drag limiter)
+    nebTnext=nebT+B.nebStep; nebBuildRow=0; nebBuilding=true;                    // begin the chunked render of the next frame
   }
 }
 function bd_neb(P,E,B){
