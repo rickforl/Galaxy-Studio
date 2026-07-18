@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Lightning Exhibit</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#03040a;font-family:'Consolas','Monaco',monospace;}
+  #topbar{position:fixed;top:0;left:0;right:0;height:31px;display:flex;align-items:center;gap:8px;padding:0 10px;
+    background:rgba(6,8,16,0.96);border-bottom:1px solid #34406a;z-index:20;box-sizing:border-box;}
+  #topbar .ttl{color:#b0c8ff;font-weight:bold;letter-spacing:1px;font-size:12px;}
+  .pill{background:#1a2350;color:#bcd0ff;border:1px solid #4a5aa0;border-radius:9px;padding:1px 9px;font:10px 'Consolas',monospace;font-weight:bold;letter-spacing:.5px;}
+  #topbar button{background:#1a2350;color:#dbe4ff;border:1px solid #4a5aa0;font:11px 'Consolas',monospace;padding:3px 10px;cursor:pointer;}
+  #topbar button:hover{background:#252f66;}
+  #stat{margin-left:auto;color:#9fb0e0;font:11px 'Consolas',monospace;}
+  #panel{position:fixed;top:31px;left:0;width:252px;max-height:calc(100vh - 31px);overflow-y:auto;
+    background:rgba(8,10,20,0.94);border-right:1px solid #2a3458;padding:8px 10px 40px;
+    color:#c8d2ec;font:11px 'Consolas',monospace;z-index:10;box-sizing:border-box;}
+  #panel .grp{color:#9fb0f0;font-weight:bold;letter-spacing:.5px;margin:10px 0 4px;border-bottom:1px solid #222a44;padding-bottom:2px;}
+  #panel .row{display:flex;align-items:center;gap:6px;margin:3px 0;}
+  #panel .lab{width:84px;flex:none;color:#9ba8c8;}
+  #panel .row input[type=range]{flex:1;min-width:0;}
+  #panel .row select{flex:1;min-width:0;background:#131a30;color:#d0daf0;border:1px solid #2f3a60;font:11px 'Consolas',monospace;}
+  #panel .val{width:36px;text-align:right;color:#d8e0f8;}
+  #panel .hint{color:#66709a;margin-top:8px;line-height:1.4;}
+</style>
+</head><body>
+<div id="topbar">
+  <span class="ttl">LIGHTNING EXHIBIT</span>
+  <span class="pill" id="build-pill">bolt_v0.1</span>
+  <button id="reseed-btn">Reseed</button>
+  <span id="stat">—</span>
+</div>
+<div id="panel"></div>
+<script>
+const BUILD_DATE='20260718', BUILD_SEQ='02', BUILD_ID='bolt_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+const PANELW=252, TOPH=31;
+
+let X = {
+  seed:1234, bg:[3,4,10],
+  layout:'radial', bolts:8, boltLength:300, spread:1.0, sourceJitter:0.3,
+  rough:0.5, detail:5, sag:0,
+  branchChance:0.35, maxDepth:3, branchCount:3, branchLen:0.55, branchSpread:0.7, branchTaper:0.6,
+  coreColor:[235,245,255], glowColor:[90,150,255], coreW:1.4, glowW:6, glowLayers:4, glowOpacity:0.4, coreOpacity:1.0, taper:0.5,
+  animMode:'flicker', flickerRate:2, strikePeriod:1.4, strikeDuty:0.45, strikeDecay:1.6,
+  showSource:true, sourceSize:7
+};
+const OPT_LAYOUT=[['radial','Radial (plasma ball)'],['down','Down (strike)'],['random','Random spray'],['chain','Chain (zig-zag)']];
+const OPT_ANIM=[['flicker','Flicker (crackle)'],['steady','Steady (frozen)'],['strike','Strike (flash + decay)']];
+const SCHEMA=[
+  ['Emitter', [['seed','Seed','range',0,9999,1],['layout','Layout','select',OPT_LAYOUT],['bolts','Bolts','range',1,40,1],['boltLength','Length','range',60,600,10],['spread','Spread','range',0,2,0.05],['sourceJitter','Src jitter','range',0,1,0.02],['bg','Background','color']]],
+  ['Bolt shape', [['rough','Roughness','range',0,1.2,0.02],['detail','Detail','range',1,7,1],['sag','Sag (gravity)','range',-1,1,0.05]]],
+  ['Branching', [['branchChance','Chance','range',0,0.8,0.01],['maxDepth','Max depth','range',0,5,1],['branchCount','Max/bolt','range',0,6,1],['branchLen','Branch len','range',0.1,1,0.02],['branchSpread','Angle spread','range',0,2,0.05],['branchTaper','Branch taper','range',0.2,1,0.02]]],
+  ['Render', [['coreColor','Core','color'],['glowColor','Glow','color'],['coreW','Core width','range',0.3,5,0.1],['glowW','Glow width','range',0,20,0.5],['glowLayers','Glow layers','range',0,8,1],['glowOpacity','Glow op.','range',0,1,0.01],['coreOpacity','Core op.','range',0,1,0.01],['taper','Depth taper','range',0,1,0.02]]],
+  ['Animation', [['animMode','Mode','select',OPT_ANIM],['flickerRate','Flicker every','range',1,12,1],['strikePeriod','Strike period','range',0.3,5,0.1],['strikeDuty','Strike duty','range',0.05,1,0.01],['strikeDecay','Strike decay','range',0.3,4,0.1]]],
+  ['Source', [['showSource','Show source','bool'],['sourceSize','Size','range',1,16,0.5]]]
+];
+const PRESETS={
+  plasma:  {name:'01 plasma ball', ov:{layout:'radial',bolts:10,boltLength:320,rough:0.5,detail:5,branchChance:0.35,maxDepth:3,branchCount:3,glowColor:[90,150,255],coreColor:[230,245,255],glowW:6,glowLayers:4,animMode:'flicker',flickerRate:2,sag:0,bg:[3,4,12]}},
+  strike:  {name:'02 storm strike', ov:{layout:'down',bolts:2,boltLength:400,rough:0.42,detail:6,sag:0.35,branchChance:0.32,maxDepth:4,branchLen:0.5,glowColor:[150,180,255],coreColor:[245,250,255],glowW:7,glowLayers:5,animMode:'strike',strikePeriod:1.8,strikeDuty:0.25,strikeDecay:2.2,sourceJitter:0.5,bg:[2,3,9]}},
+  tesla:   {name:'03 tesla coil', ov:{layout:'radial',bolts:16,boltLength:260,rough:0.6,detail:5,branchChance:0.35,maxDepth:3,branchTaper:0.55,glowColor:[170,110,255],coreColor:[240,225,255],coreW:1,glowW:4,glowLayers:3,glowOpacity:0.45,animMode:'flicker',flickerRate:1,bg:[4,2,10]}},
+  arc:     {name:'04 single arc', ov:{layout:'chain',bolts:1,boltLength:420,rough:0.55,detail:6,branchChance:0.22,maxDepth:3,glowColor:[110,200,255],coreColor:[235,250,255],coreW:1.6,glowW:8,glowLayers:5,animMode:'flicker',flickerRate:3,bg:[3,5,12]}},
+  web:     {name:'05 branchy web', ov:{layout:'radial',bolts:6,boltLength:300,rough:0.55,detail:5,branchChance:0.55,maxDepth:4,branchCount:4,branchLen:0.6,branchTaper:0.7,glowColor:[100,255,210],coreColor:[235,255,250],coreW:1,glowW:3,glowLayers:3,animMode:'flicker',flickerRate:2,bg:[2,7,8]}},
+  calm:    {name:'06 frozen bolt', ov:{layout:'radial',bolts:7,boltLength:300,rough:0.5,detail:5,branchChance:0.28,maxDepth:3,glowColor:[90,150,255],coreColor:[230,245,255],glowW:6,glowLayers:4,animMode:'steady'}}
+};
+let activePreset='plasma';
+
+// ---- generation ----
+let _rs=1; function rseed(n){ _rs=(n>>>0)||1; } function rand(){ _rs=(_rs*1664525+1013904223)>>>0; return _rs/4294967296; }
+let strokes=[], src={x:0,y:0}, needsBuild=true, lastStrike=-999;
+function playRect(){ return { x:PANELW, y:TOPH, w:width-PANELW, h:height-TOPH }; }
+function jaggedPath(sx,sy,ex,ey, iters){
+  let pts=[{x:sx,y:sy},{x:ex,y:ey}];
+  for(let it=0;it<iters;it++){ let np=[pts[0]];
+    for(let i=0;i<pts.length-1;i++){ let A=pts[i],B=pts[i+1], dx=B.x-A.x,dy=B.y-A.y, l=Math.hypot(dx,dy)||1, nx=-dy/l, ny=dx/l;
+      let disp=(rand()*2-1)*X.rough*l;
+      np.push({x:(A.x+B.x)/2+nx*disp, y:(A.y+B.y)/2+ny*disp + X.sag*l*0.12}); np.push(B); }
+    pts=np; }
+  return pts;
+}
+function genBolt(sx,sy,ex,ey, depth, w){
+  if(strokes.length>1400) return;                                            // safety cap against runaway branching
+  let pts=jaggedPath(sx,sy,ex,ey, Math.max(1,(X.detail|0)-depth)); strokes.push({pts,w,depth});   // deeper branches = simpler
+  if(depth<X.maxDepth){ let made=0;
+    for(let i=1;i<pts.length-1 && made<X.branchCount;i++){ if(rand()<X.branchChance){ made++;
+      let p=pts[i], q=pts[i+1], r=pts[i-1], ang=Math.atan2(q.y-r.y,q.x-r.x)+(rand()*2-1)*X.branchSpread;
+      let remain=Math.hypot(ex-p.x,ey-p.y), len=X.branchLen*remain*(0.4+0.8*rand());
+      genBolt(p.x,p.y, p.x+Math.cos(ang)*len, p.y+Math.sin(ang)*len, depth+1, w*X.branchTaper); } } }
+}
+function build(seedVal){
+  rseed(seedVal|0); strokes=[];
+  let R=playRect(), cx=R.x+R.w/2, cy=R.y+R.h/2; src={x:cx,y:cy};
+  let N=X.bolts|0;
+  if(X.layout==='down'){ let topY=R.y+R.h*0.08, botY=R.y+R.h*0.94; src={x:cx,y:topY};
+    for(let i=0;i<N;i++){ let sx=cx+(rand()*2-1)*R.w*0.18*X.sourceJitter, ex=cx+(rand()*2-1)*R.w*0.42*X.spread; genBolt(sx,topY,ex,botY,0,1); } }
+  else if(X.layout==='chain'){ src={x:R.x+R.w*0.12,y:cy};
+    for(let i=0;i<N;i++){ let sy=cy+(rand()*2-1)*R.h*0.3*X.spread; genBolt(R.x+R.w*0.1, sy, R.x+R.w*0.9, cy+(rand()*2-1)*R.h*0.3*X.spread, 0, 1); } }
+  else { for(let i=0;i<N;i++){ let a=(X.layout==='random')? rand()*TWO_PI : (i/N)*TWO_PI+(rand()*2-1)*0.3*X.spread; let len=X.boltLength*(0.65+0.6*rand()); genBolt(cx,cy, cx+Math.cos(a)*len, cy+Math.sin(a)*len, 0, 1); } }
+  needsBuild=false;
+}
+
+function rgba(c,a){ return 'rgba('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+a+')'; }
+function drawStroke(s, alpha){
+  let dc=drawingContext; dc.lineCap='round'; dc.lineJoin='round';
+  let wB = s.w*(1 - X.taper*(s.depth/(X.maxDepth+1)));
+  let path=()=>{ dc.beginPath(); dc.moveTo(s.pts[0].x,s.pts[0].y); for(let i=1;i<s.pts.length;i++) dc.lineTo(s.pts[i].x,s.pts[i].y); };
+  for(let g=X.glowLayers|0; g>=1; g--){ let f=g/X.glowLayers; dc.strokeStyle=rgba(X.glowColor, X.glowOpacity*(1-f*0.65)*alpha); dc.lineWidth=Math.max(0.5,(X.coreW+X.glowW*f)*wB); path(); dc.stroke(); }
+  dc.strokeStyle=rgba(X.coreColor, X.coreOpacity*alpha); dc.lineWidth=Math.max(0.4,X.coreW*wB); path(); dc.stroke();
+}
+
+function setup(){ pixelDensity(1); createCanvas(windowWidth, windowHeight); buildPanel(); applyPreset(activePreset); }
+function windowResized(){ resizeCanvas(windowWidth, windowHeight); needsBuild=true; }
+let fpsT=0, lastFps=0, alpha=1;
+function draw(){
+  if(X.animMode==='steady'){ if(needsBuild) build(X.seed); alpha=1; }
+  else if(X.animMode==='flicker'){ let iv=Math.max(1,X.flickerRate|0); if(needsBuild || frameCount%iv===0) build((X.seed|0)+frameCount); alpha=1; }
+  else { let tsec=millis()*0.001, T=X.strikePeriod, tt=tsec%T, idx=Math.floor(tsec/T), aw=X.strikeDuty*T;
+    if(idx!==lastStrike || needsBuild){ lastStrike=idx; build((X.seed|0)+idx*97); }
+    alpha = tt<aw ? Math.pow(1-tt/aw, X.strikeDecay) : 0; }
+  background(X.bg[0],X.bg[1],X.bg[2]);
+  let dc=drawingContext;
+  push(); blendMode(ADD);
+  for(const s of strokes) drawStroke(s, alpha);
+  if(X.showSource && alpha>0.02){ let r=X.sourceSize; let g=dc.createRadialGradient(src.x,src.y,0,src.x,src.y,r*2.4);
+    g.addColorStop(0,rgba(X.coreColor,0.9*alpha)); g.addColorStop(0.4,rgba(X.glowColor,0.6*alpha)); g.addColorStop(1,rgba(X.glowColor,0)); dc.fillStyle=g; dc.beginPath(); dc.arc(src.x,src.y,r*2.4,0,TWO_PI); dc.fill();
+    dc.fillStyle=rgba(X.coreColor,alpha); dc.beginPath(); dc.arc(src.x,src.y,r*0.5,0,TWO_PI); dc.fill(); }
+  pop(); blendMode(BLEND);
+  if(millis()-fpsT>400){ fpsT=millis(); lastFps=Math.round(frameRate());
+    document.getElementById('stat').textContent=strokes.length+' arcs · '+lastFps+' fps · '+BUILD_ID; }
+}
+
+// ---- controls ----
+function rgbToHex(c){ return '#'+[0,1,2].map(i=>('0'+(c[i]|0).toString(16)).slice(-2)).join(''); }
+function hexToRgb(h){ return [parseInt(h.substr(1,2),16),parseInt(h.substr(3,2),16),parseInt(h.substr(5,2),16)]; }
+const BUILD_KEYS=new Set(['seed','layout','bolts','boltLength','spread','sourceJitter','rough','detail','sag','branchChance','maxDepth','branchCount','branchLen','branchSpread','branchTaper']);
+let ctrls={};
+function buildPanel(){
+  let panel=document.getElementById('panel'); panel.innerHTML=''; ctrls={};
+  let pr=document.createElement('div'); pr.className='row'; let pl=document.createElement('span'); pl.className='lab'; pl.textContent='Preset'; pr.appendChild(pl);
+  let ps=document.createElement('select'); for(const k of Object.keys(PRESETS)){ let o=document.createElement('option'); o.value=k; o.textContent=PRESETS[k].name; ps.appendChild(o); }
+  ps.value=activePreset; ps.onchange=()=>applyPreset(ps.value); pr.appendChild(ps); panel.appendChild(pr); ctrls._preset=ps;
+  for(const [group,items] of SCHEMA){
+    let h=document.createElement('div'); h.className='grp'; h.textContent=group; panel.appendChild(h);
+    for(const it of items){ let [key,label,type]=it, row=document.createElement('div'); row.className='row';
+      let lab=document.createElement('span'); lab.className='lab'; lab.textContent=label; row.appendChild(lab);
+      if(type==='range'){ let inp=document.createElement('input'); inp.type='range'; inp.min=it[3]; inp.max=it[4]; inp.step=it[5]; inp.value=X[key];
+        let val=document.createElement('span'); val.className='val'; val.textContent=X[key];
+        inp.oninput=()=>{ X[key]=parseFloat(inp.value); val.textContent=inp.value; if(BUILD_KEYS.has(key)) needsBuild=true; }; row.appendChild(inp); row.appendChild(val); ctrls[key]={inp,val};
+      } else if(type==='bool'){ let inp=document.createElement('input'); inp.type='checkbox'; inp.checked=!!X[key]; inp.oninput=()=>{ X[key]=inp.checked; }; row.appendChild(inp); ctrls[key]={inp};
+      } else if(type==='color'){ let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(X[key]); inp.oninput=()=>{ X[key]=hexToRgb(inp.value); }; row.appendChild(inp); ctrls[key]={inp};
+      } else if(type==='select'){ let inp=document.createElement('select'); for(const [v,t] of it[3]){ let o=document.createElement('option'); o.value=v; o.textContent=t; inp.appendChild(o); } inp.value=X[key];
+        inp.oninput=()=>{ X[key]=inp.value; if(BUILD_KEYS.has(key)) needsBuild=true; }; row.appendChild(inp); ctrls[key]={inp}; }
+      panel.appendChild(row);
+    }
+  }
+  let hint=document.createElement('div'); hint.className='hint';
+  hint.textContent='Fractal bolts (midpoint displacement) with recursive branches. Flicker re-forks every frame; Strike flashes + decays. Multi-layer glow + white core. Reseed re-forks the whole pattern.';
+  panel.appendChild(hint);
+}
+function refreshPanel(){ for(const key in ctrls){ if(key==='_preset'){ ctrls._preset.value=activePreset; continue; } let c=ctrls[key], v=X[key];
+  if(c.inp.type==='checkbox') c.inp.checked=!!v; else if(c.inp.type==='color') c.inp.value=rgbToHex(v); else { c.inp.value=v; if(c.val) c.val.textContent=v; } } }
+function applyPreset(name){ if(!PRESETS[name]) return; activePreset=name; Object.assign(X, JSON.parse(JSON.stringify(PRESETS[name].ov))); needsBuild=true; refreshPanel(); }
+function reseed(){ X.seed=Math.floor(Math.random()*9999); needsBuild=true; refreshPanel(); }
+window.addEventListener('load',()=>{ document.getElementById('build-pill').textContent=BUILD_ID; document.getElementById('reseed-btn').onclick=reseed; });
+</script>
+</body></html>
