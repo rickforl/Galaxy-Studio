@@ -64,7 +64,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '44';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '45';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -200,6 +200,7 @@ function setup(){
 function windowResized(){ resizeCanvas(windowWidth, windowHeight); invalidateStars(); }
 
 let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
+let lastInteract = -99999;  // ms of the last pan/zoom — used to defer the expensive nebula re-render while interacting
 function draw(){
   stepNebula(CFG.backdrop);                                                    // nebula: hold, then crossfade to the next stepped frame
   if(CFG.traffic.on){ for(const L of CFG.traffic.layers) if(L.on) L.time=(L.time||0)+(L.speed||1)*CFG.traffic.speed*0.01; }   // advance each traffic layer's clock
@@ -772,7 +773,7 @@ function stepNebula(B){                                                        /
   if(nebFading){
     nebFadeAmt = B.nebBlend>0 ? (millis()-nebFadeStart)/(B.nebBlend*1000) : 1;
     if(nebFadeAmt>=1){ let tmp=nebCur; nebCur=nebNext; nebNext=tmp; nebT=nebTnext; nebFadeAmt=0; nebFading=false; lastNebStep=millis(); invalidateBackdrop(); }
-  } else if(nebCur && millis()-lastNebStep > B.nebInterval*1000){
+  } else if(nebCur && millis()-lastNebStep > B.nebInterval*1000 && millis()-lastInteract > 300){   // drag limiter: don't fire the ~140ms nebula re-render mid pan/zoom — wait until interaction pauses
     nebTnext=nebT+B.nebStep; renderNebInto(nebNext, nebTnext, B);                // render the next frame...
     nebCur.loadPixels(); nebNext.loadPixels(); nbCurPx=nebCur.pixels; nbNextPx=nebNext.pixels;   // ...cache both for the dissolve
     nebFadeAmt=0; nebFadeStart=millis(); nebFading=true;
@@ -865,8 +866,8 @@ function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); regenerate();
 function mousePressed(){ if(viewMode==='galaxy'||activePage!=='traffic'||trafEditIdx==null||mouseX<=PANELW) return;   // edit-grid cell click -> pick a style
   let L=CFG.traffic.layers[trafEditIdx]; if(!L) return;
   for(const cell of trafEditCells()){ if(mouseX>=cell.x&&mouseX<=cell.x+cell.w&&mouseY>=cell.y&&mouseY<=cell.y+cell.h){ if(L.style!==cell.style){ L.style=cell.style; showPage(); } return; } } }
-function mouseDragged(){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; } }
-function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); return false; } }
+function mouseDragged(){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; lastInteract=millis(); } }
+function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); lastInteract=millis(); return false; } }
 function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); }
 function updateModeBtn(){ let b=document.getElementById('mode-btn'); if(b) b.innerHTML = (viewMode==='options') ? '&#9654; VIEW GALAXY' : '&#9664; OPTIONS'; }
 const CFG_KEY='galaxy_studio_cfg';
