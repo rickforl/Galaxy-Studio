@@ -47,6 +47,7 @@
   <span class="ttl">GALAXY STUDIO</span>
   <span id="build-pill">&mdash;</span>
   <button id="mode-btn">&#9654; VIEW GALAXY</button>
+  <button id="fs-btn" title="Fullscreen — Esc exits · i toggles the info readout">&#9974; Fullscreen</button>
   <span id="fps-pill" title="click for FPS records">FPS &mdash;</span>
   <input id="export-name" type="text" value="galaxy_cfg.json" title="Export filename" spellcheck="false"
     style="width:120px;background:#0c1018;color:#cdd6e4;border:1px solid #2a3550;border-radius:4px;font:inherit;font-size:11px;padding:2px 5px;">
@@ -64,7 +65,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '47';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '49';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -172,7 +173,7 @@ const PRESETS = {
 const PRESET_LABELS = { current:'★ current', full_rich:'01 full rich', lod_crossfade:'02 LOD crossfade', perf_cuts:'03 perf cuts', edge_sweet:'04 edge sweet-spot', stripped:'05 stripped', glow_bloom:'06 glow bloom' };
 
 let plasmaBuf, filaBuf; const BUFN = 96;
-const PANELW = 272;
+let PANELW = 272;   // panel width = galaxy-view left offset; set to 0 in fullscreen so the galaxy fills the whole window
 
 function setup(){
   pixelDensity(1);   // hi-DPI (devicePixelRatio 1.5) would render at 2.25x pixels — pin to 1x for the FPS floor
@@ -192,6 +193,8 @@ function setup(){
   document.getElementById('import-btn').onclick = () => document.getElementById('import-file').click();
   document.getElementById('import-file').onchange = (e) => { if (e.target.files[0]) importCFG(e.target.files[0]); };
   document.getElementById('fps-pill').onclick = toggleFpsSheet;
+  document.getElementById('fs-btn').onclick = enterFullscreen;
+  document.addEventListener('fullscreenchange', ()=>{ if(!document.fullscreenElement && fullscreen) applyFullscreen(false); });   // Esc / native exit -> restore the UI
   document.getElementById('build-pill').textContent = BUILD_ID;
   loadFpsRecords();
   regenerate();                 // build the initial galaxy
@@ -200,6 +203,7 @@ function setup(){
 function windowResized(){ resizeCanvas(windowWidth, windowHeight); invalidateStars(); }
 
 let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
+let fullscreen = false, infoOverlay = true;   // fullscreen galaxy (Esc to exit); info overlay = subtle build+fps bottom-left (toggle with i)
 let lastInteract = -99999;  // ms of the last pan/zoom — used to defer the expensive nebula re-render while interacting
 function draw(){
   stepNebula(CFG.backdrop);                                                    // nebula: hold, then crossfade to the next stepped frame
@@ -210,6 +214,12 @@ function draw(){
   else if (activePage === 'lanes') drawLanesPreview();         // isolated lane network (nodes + beams, fit)
   else if (activePage === 'traffic') { if(trafEditIdx!=null) drawTrafficEditGrid(trafEditIdx); else drawTrafficPreview(); }   // edit grid, or isolated traffic
   else drawSunPreview();
+  if(fullscreen && infoOverlay){                                              // subtle build + fps pill, bottom-left
+    push(); blendMode(BLEND); noStroke(); textSize(11); textAlign(LEFT,CENTER);
+    let s=BUILD_ID+'   ·   '+Math.round(frameRate())+' fps', tw=textWidth(s);
+    fill(8,12,20,150); rectMode(CORNER); rect(12, height-30, tw+18, 20, 5);
+    fill(150,168,195,210); text(s, 21, height-20); pop();
+  }
   updateFps();
   if(millis()-lastSaveCheck>1500){ lastSaveCheck=millis(); autoSave(); }        // debounced auto-persist to localStorage
 }
@@ -625,8 +635,8 @@ function drawGalaxyView(){
     drawn++;
   }
   pop();
-  blendMode(BLEND); noStroke(); textAlign(LEFT, TOP); fill(120,140,175); textSize(11);
-  text(galaxy.length+' stars · '+drawn+' drawn · '+(baked?('BAKED'+(liveOverlay?'+live':'')):'live')+' · '+sunSpriteCache.size+' sprites · zoom '+cam.zoom.toFixed(2)+'   [drag/wheel]', PANELW+12, 40);
+  if(!fullscreen){ blendMode(BLEND); noStroke(); textAlign(LEFT, TOP); fill(120,140,175); textSize(11);
+    text(galaxy.length+' stars · '+drawn+' drawn · '+(baked?('BAKED'+(liveOverlay?'+live':'')):'live')+' · '+sunSpriteCache.size+' sprites · zoom '+cam.zoom.toFixed(2)+'   [drag/wheel]', PANELW+12, 40); }
 }
 
 // ---------- Phase 1: galaxy generation + camera ----------
@@ -723,7 +733,7 @@ function bd_base(P,E,B){
 }
 // ---- procedural noise nebula (domain-warp / fBm / emission), rendered once to a texture, stepped over time ----
 const NEB_RES=176, NEB_CHUNK=16;   // NEB_CHUNK = rows rendered per frame during an animation build (spreads the ~140ms field render so no frame spikes)
-let nebCur=null, nebNext=null, nebBlendTex=null, nbCurPx=null, nbNextPx=null, nebT=0, nebTnext=0, nbRenderT=0, nebFadeAmt=0, nebFading=false, nebFadeStart=0, lastNebStep=0, lastNebStaticSig='', nebBuilding=false, nebBuildRow=0;
+let nebCur=null, nebNext=null, nebBlendTex=null, nbCurPx=null, nbNextPx=null, nebT=0, nebTnext=0, nbRenderT=0, nebFadeAmt=0, nebFading=false, nebFadeStart=0, lastNebStep=0, lastNebStaticSig='', nebBuilding=false, nebBuildRow=0, nebInitBuild=false, nebInitRow=0;
 function nbSmooth(a,b,x){ let t=constrain((x-a)/(b-a),0,1); return t*t*(3-2*t); }
 function nbFbm(x,y,oct){ let a=0.5,f=1,s=0,n=0; for(let o=0;o<oct;o++){ s+=a*noise(x*f,y*f,nbRenderT); n+=a; a*=0.5; f*=2; } return s/n; }
 function nbWarp(x,y,oct,w){ let q1=nbFbm(x+1.7,y+9.2,oct), q2=nbFbm(x+5.2,y+1.3,oct); return nbFbm(x+w*q1, y+w*q2, oct); }
@@ -754,7 +764,7 @@ function renderNebInto(tex, tval, B){ renderNebRows(tex, tval, B, 0, NEB_RES); }
 function ensureNeb(B){                                                         // lazily create the textures; re-render on a parameter change
   if(!nebCur){ nebCur=createGraphics(NEB_RES,NEB_RES); nebCur.pixelDensity(1); nebNext=createGraphics(NEB_RES,NEB_RES); nebNext.pixelDensity(1);
     nebBlendTex=createGraphics(NEB_RES,NEB_RES); nebBlendTex.pixelDensity(1); nebBlendTex.loadPixels();
-    renderNebInto(nebCur, nebT, B); lastNebStaticSig=nebSigStatic(B); return; }
+    renderNebRows(nebCur, nebT, B, 0, NEB_CHUNK); nebInitRow=NEB_CHUNK; nebInitBuild=true; lastNebStaticSig=nebSigStatic(B); return; }   // chunked initial render -> no cold-start spike; finished in stepNebula
   let sig=nebSigStatic(B);
   if(sig!==lastNebStaticSig){ renderNebInto(nebCur, nebT, B); lastNebStaticSig=sig; nebFading=false; nebFadeAmt=0; }
 }
@@ -770,6 +780,13 @@ function nbDrawTex(P,E,B){                                                     /
   P.push(); P.imageMode(CENTER); P.image(tex, 0,0, 2*E, 2*E); P.pop();
 }
 function stepNebula(B){                                                        // per-frame: hold for Interval, incrementally render the next frame, then crossfade over Blend
+  if(!nebCur && B.nebOn && B.nebType!=='blobs'){ ensureNeb(B); return; }        // kick off the chunked initial render in the background (any tab/view) so View Galaxy never renders it cold
+  if(nebInitBuild){                                                            // finish the initial render over frames
+    let y1=Math.min(NEB_RES, nebInitRow+NEB_CHUNK);
+    renderNebRows(nebCur, nebT, B, nebInitRow, y1); nebInitRow=y1;
+    if(nebInitRow>=NEB_RES){ nebInitBuild=false; invalidateBackdrop(); }        // done -> re-bake the neb layer with the full field
+    return;
+  }
   if(!(B.nebOn && B.nebAnimOn && B.nebType!=='blobs')){ nebFading=false; nebBuilding=false; return; }
   if(nebBuilding){                                                             // spread the ~140ms field render across frames -> no single frame spikes
     let y1=Math.min(NEB_RES, nebBuildRow+NEB_CHUNK);
@@ -875,6 +892,15 @@ function mouseDragged(){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mou
 function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); lastInteract=millis(); return false; } }
 function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); }
 function updateModeBtn(){ let b=document.getElementById('mode-btn'); if(b) b.innerHTML = (viewMode==='options') ? '&#9654; VIEW GALAXY' : '&#9664; OPTIONS'; }
+function applyFullscreen(on){                                                 // app-side: hide the UI + let the galaxy fill the window
+  fullscreen = on; PANELW = on ? 0 : 272;
+  let p=document.getElementById('panel'), t=document.getElementById('topbar');
+  if(p) p.style.display = on?'none':''; if(t) t.style.display = on?'none':'';
+  if(on){ viewMode='galaxy'; updateModeBtn(); }
+  resizeCanvas(windowWidth, windowHeight); invalidateStars();
+}
+function enterFullscreen(){ applyFullscreen(true); let el=document.documentElement; if(el.requestFullscreen){ try{ el.requestFullscreen().catch(()=>{}); }catch(e){} } }
+function exitFullscreen(){ let inFs=!!document.fullscreenElement; applyFullscreen(false); if(inFs && document.exitFullscreen){ try{ document.exitFullscreen().catch(()=>{}); }catch(e){} } }
 const CFG_KEY='galaxy_studio_cfg';
 let lastSaved='', lastSaveCheck=0;
 function studioSnapshot(){ return Object.assign({}, CFG, { view:{ camX:cam.x, camY:cam.y, camZoom:cam.zoom, preset:ACTIVE_PRESET } }); }   // full studio state: all CFG + framing + preset
@@ -1311,6 +1337,8 @@ function applyPreset(name){
   let tag=document.getElementById('preset-tag'); if(tag) tag.textContent='· '+(PRESET_LABELS[name]||name);
 }
 function keyPressed(){
+  if((key==='i'||key==='I') && !/^(INPUT|SELECT|TEXTAREA)$/.test((document.activeElement&&document.activeElement.tagName)||'')){ infoOverlay=!infoOverlay; return; }   // toggle the fullscreen info readout
+  if(keyCode===ESCAPE){ if(fullscreen) exitFullscreen(); return; }             // leave fullscreen
   if(activePage!=='sun') return;   // preset cycling lives on the Sun page
   let keys=Object.keys(PRESETS), i=keys.indexOf(ACTIVE_PRESET);
   if(key===']') applyPreset(keys[(i+1)%keys.length]);
