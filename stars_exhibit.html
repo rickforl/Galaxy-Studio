@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Stars Exhibit</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#04060c;font-family:'Consolas','Monaco',monospace;}
+  #topbar{position:fixed;top:0;left:0;right:0;height:31px;display:flex;align-items:center;gap:8px;padding:0 10px;
+    background:rgba(6,10,16,0.96);border-bottom:1px solid #24425a;z-index:20;box-sizing:border-box;}
+  #topbar .ttl{color:#9fd0e0;font-weight:bold;letter-spacing:1px;font-size:12px;}
+  .pill{background:#16283b;color:#9fd8e8;border:1px solid #3a6a8c;border-radius:9px;padding:1px 9px;font:10px 'Consolas',monospace;font-weight:bold;letter-spacing:.5px;}
+  #topbar button{background:#16283b;color:#cde6ef;border:1px solid #3a6a8c;font:11px 'Consolas',monospace;padding:3px 10px;cursor:pointer;}
+  #topbar button:hover{background:#1e3d4d;}
+  #stat{margin-left:auto;color:#8fe0c8;font:11px 'Consolas',monospace;}
+  #panel{position:fixed;top:31px;left:0;width:250px;max-height:calc(100vh - 31px);overflow-y:auto;
+    background:rgba(8,12,20,0.94);border-right:1px solid #2a3a58;padding:8px 10px 40px;
+    color:#c8d6e4;font:11px 'Consolas',monospace;z-index:10;box-sizing:border-box;}
+  #panel .grp{color:#8fb8e0;font-weight:bold;letter-spacing:.5px;margin:10px 0 4px;border-bottom:1px solid #223040;padding-bottom:2px;}
+  #panel .grp .x{cursor:pointer;color:#c67;float:right;font-weight:normal;}
+  #panel .row{display:flex;align-items:center;gap:6px;margin:3px 0;}
+  #panel .lab{width:74px;flex:none;color:#9bb0c4;}
+  #panel .row input[type=range]{flex:1;min-width:0;}
+  #panel .val{width:38px;text-align:right;color:#d0e0f0;}
+  #panel .addbtn{width:100%;margin-top:10px;background:#123040;color:#bfe6ef;border:1px solid #3a6a8c;font:11px 'Consolas',monospace;padding:5px;cursor:pointer;}
+  #panel .addbtn:hover{background:#1a4050;}
+  #panel .hint{color:#60708a;margin-top:8px;line-height:1.4;}
+</style>
+</head><body>
+<div id="topbar">
+  <span class="ttl">STARS EXHIBIT</span>
+  <span class="pill" id="build-pill">star_v0.1</span>
+  <button id="reseed-btn">Reseed</button>
+  <span id="stat">—</span>
+</div>
+<div id="panel"></div>
+<script>
+const BUILD_DATE='20260717', BUILD_SEQ='08', BUILD_ID='star_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+const PANELW=250, TOPH=31, GAP=10;
+const STAR_COLS=[[150,176,255],[200,214,255],[255,255,255],[255,246,214],[255,212,162],[255,168,128]];  // blue -> white -> red
+
+// ---- config: globals + an array of radial star layers ----
+// Each layer scatters stars uniformly inside a disc of `radius` (1 ~= fills the view). Stack layers
+// of shrinking radius and the center naturally gets denser where discs overlap — no repositioning.
+function newLayer(o){ return Object.assign({on:true,bake:false,uniform:false,count:500,radius:0.6,size:1.4,bright:0.8,color:0.5,twinkle:0.5,glow:0,spikes:false,spikeLen:0}, o||{}); }
+let S = {
+  seed:1234, twSpeed:1.0, bg:[3,4,9],
+  layers:[
+    newLayer({name:'Uniform',uniform:true, count:1400, radius:1.0, size:0.9, bright:0.45, color:0.2, twinkle:0.2}),
+    newLayer({name:'Halo',   count:2600, radius:1.05, size:0.9, bright:0.5,  color:0.25, twinkle:0.2 }),
+    newLayer({name:'Field',  count:550,  radius:1.0,  size:1.6, bright:0.85, color:0.5,  twinkle:0.5 }),
+    newLayer({name:'Disc',   count:1000, radius:0.8,  size:1.4, bright:0.8,  color:0.45, twinkle:0.45}),
+    newLayer({name:'Core',   count:800,  radius:0.45, size:1.2, bright:0.95, color:0.5,  twinkle:0.4 }),
+    newLayer({name:'Bright', count:50,   radius:0.7,  size:3.0, bright:1.1,  color:0.6,  twinkle:0.6, glow:2.0, spikes:true, spikeLen:3.0})
+  ]
+};
+const GLOBAL_CTRLS=[['seed','Seed','range',0,9999,1],['twSpeed','Twinkle speed','range',0,3,0.05],['bg','Background','color']];
+const LAYER_CTRLS=[['on','On','bool'],['bake','Bake (freezes twinkle)','bool'],['uniform','Uniform fill','bool'],['count','Count','range',0,5000,20],['radius','Radius','range',0.05,1.4,0.01],
+  ['size','Size','range',0.3,6,0.1],['bright','Bright','range',0,1.5,0.01],['color','Color','range',0,1,0.01],
+  ['twinkle','Twinkle','range',0,1,0.01],['glow','Glow','range',0,4,0.05],['spikes','Spikes','bool'],['spikeLen','Spike len','range',0,6,0.1]];
+
+// ---- deterministic star generation (disc coords: angle + sqrt-uniform radius) ----
+let starsData=[], needsGen=true;
+function genStars(count, seed){
+  randomSeed(seed); let a=new Array(count);
+  for(let i=0;i<count;i++){ a[i]={ ang:random()*TWO_PI, rr:Math.sqrt(random()), sz:random(), br:random(), ci:Math.floor(random()*STAR_COLS.length), ph:random()*TWO_PI, rate:0.5+random()*1.6, u:random(), v:random() }; }
+  return a;
+}
+function genAll(){ starsData=S.layers.map((L,i)=>genStars(L.count|0,(S.seed|0)*7+i*131+17)); needsGen=false; }
+let layerBuf=[], bakeDirty=true;
+function opt(L){ return {uniform:L.uniform,radius:L.radius,size:L.size,bright:L.bright,color:L.color,twinkle:L.twinkle,glow:L.glow,spikes:L.spikes,spikeLen:L.spikeLen,speed:S.twSpeed}; }
+function bakeLayer(i){                                // render a layer once into its own full-canvas buffer (twinkle frozen at bake time)
+  if(!layerBuf[i] || layerBuf[i].width!==width || layerBuf[i].height!==height){ layerBuf[i]=createGraphics(width,height); layerBuf[i].pixelDensity(1); }
+  layerBuf[i].clear();
+  drawLayer(layerBuf[i], starsData[i], opt(S.layers[i]), millis()*0.001);
+}
+function rebakeAll(){ for(let i=0;i<S.layers.length;i++){ if(S.layers[i].on && S.layers[i].bake) bakeLayer(i); } }
+
+function rgba(c,a){ return 'rgba('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+a+')'; }
+function starCol(ci,amt){ let b=STAR_COLS[ci]; return [255+(b[0]-255)*amt,255+(b[1]-255)*amt,255+(b[2]-255)*amt]; }
+function playRect(){ return { x:PANELW+GAP, y:TOPH+GAP, w:width-PANELW-GAP*2, h:height-TOPH-GAP*2 }; }
+
+function drawLayer(P, arr, o, t){
+  if(!arr) return 0;
+  let dc=P.drawingContext, R=playRect(), cx=R.x+R.w/2, cy=R.y+R.h/2, BR=0.5*Math.hypot(R.w,R.h), n=0;
+  let additive = (o.glow>0 || o.spikes);
+  if(additive){ P.push(); P.blendMode(ADD); P.noStroke(); }
+  for(const s of arr){
+    let tw = 1 - o.twinkle*(0.42+0.46*Math.sin(t*o.speed*s.rate + s.ph));
+    let b = o.bright*(0.35+0.65*s.br)*tw; if(b<=0.012) continue;
+    let x, y;
+    if(o.uniform){ x = R.x + s.u*R.w; y = R.y + s.v*R.h; }                     // uniform fill (rect)
+    else { let rad = o.radius*s.rr*BR; x = cx + Math.cos(s.ang)*rad; y = cy + Math.sin(s.ang)*rad; }   // radial disc
+    let col = starCol(s.ci,o.color), sz = o.size*(0.55+0.9*s.sz), a=Math.min(1,b);
+    if(o.glow>0){ let r=sz*o.glow*2.2, g=dc.createRadialGradient(x,y,0,x,y,r);
+      g.addColorStop(0,rgba(col,0.45*a)); g.addColorStop(1,rgba(col,0)); dc.fillStyle=g; dc.beginPath(); dc.arc(x,y,r,0,TWO_PI); dc.fill(); }
+    if(additive){ dc.fillStyle=rgba(col,a); dc.beginPath(); dc.arc(x,y,sz*0.55,0,TWO_PI); dc.fill(); }
+    else { dc.fillStyle=rgba(col,a); dc.fillRect(x-sz/2,y-sz/2,sz,sz); }
+    if(o.spikes && o.spikeLen>0){ let L=sz*o.spikeLen, tw2=Math.max(0.6,sz*0.14);
+      let lg=dc.createLinearGradient(x-L,y,x+L,y); lg.addColorStop(0,rgba(col,0)); lg.addColorStop(0.5,rgba(col,0.4*b)); lg.addColorStop(1,rgba(col,0));
+      dc.fillStyle=lg; dc.fillRect(x-L,y-tw2/2,2*L,tw2);
+      let vg=dc.createLinearGradient(x,y-L,x,y+L); vg.addColorStop(0,rgba(col,0)); vg.addColorStop(0.5,rgba(col,0.4*b)); vg.addColorStop(1,rgba(col,0));
+      dc.fillStyle=vg; dc.fillRect(x-tw2/2,y-L,tw2,2*L); }
+    n++;
+  }
+  if(additive){ P.pop(); P.blendMode(BLEND); }
+  return n;
+}
+
+function setup(){ pixelDensity(1); createCanvas(windowWidth, windowHeight); buildPanel(); genAll(); }
+function windowResized(){ resizeCanvas(windowWidth, windowHeight); bakeDirty=true; }
+let fpsT=0;
+function draw(){
+  if(needsGen){ genAll(); bakeDirty=true; }
+  if(bakeDirty){ rebakeAll(); bakeDirty=false; }
+  background(S.bg[0],S.bg[1],S.bg[2]);
+  let t=millis()*0.001, drawn=0, baked=0;
+  for(let i=0;i<S.layers.length;i++){ let L=S.layers[i]; if(!L.on) continue;
+    if(L.bake){ if(layerBuf[i]) image(layerBuf[i],0,0); drawn += (starsData[i]?starsData[i].length:0); baked++; }
+    else drawn += drawLayer(window, starsData[i], opt(L), t); }
+  if(millis()-fpsT>400){ fpsT=millis();
+    document.getElementById('stat').textContent=drawn+' stars · '+S.layers.length+' layers ('+baked+' baked) · '+Math.round(frameRate())+' fps · '+BUILD_ID; }
+}
+
+// ---- controls ----
+function rgbToHex(c){ return '#'+[0,1,2].map(i=>('0'+(c[i]|0).toString(16)).slice(-2)).join(''); }
+function hexToRgb(h){ return [parseInt(h.substr(1,2),16),parseInt(h.substr(3,2),16),parseInt(h.substr(5,2),16)]; }
+function buildRow(parent, target, it){
+  let [key,label,type]=it, row=document.createElement('div'); row.className='row';
+  let lab=document.createElement('span'); lab.className='lab'; lab.textContent=label; row.appendChild(lab);
+  if(type==='range'){
+    let inp=document.createElement('input'); inp.type='range'; inp.min=it[3]; inp.max=it[4]; inp.step=it[5]; inp.value=target[key];
+    let val=document.createElement('span'); val.className='val'; val.textContent=target[key];
+    inp.oninput=()=>{ target[key]=parseFloat(inp.value); val.textContent=inp.value; if(key==='seed'||key==='count') needsGen=true; bakeDirty=true; };
+    row.appendChild(inp); row.appendChild(val);
+  } else if(type==='bool'){
+    let inp=document.createElement('input'); inp.type='checkbox'; inp.checked=!!target[key];
+    inp.oninput=()=>{ target[key]=inp.checked; bakeDirty=true; }; row.appendChild(inp);
+  } else if(type==='color'){
+    let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(target[key]);
+    inp.oninput=()=>{ target[key]=hexToRgb(inp.value); bakeDirty=true; }; row.appendChild(inp);
+  }
+  parent.appendChild(row);
+}
+function buildPanel(){
+  let panel=document.getElementById('panel'); panel.innerHTML='';
+  let gh=document.createElement('div'); gh.className='grp'; gh.textContent='Global'; panel.appendChild(gh);
+  for(const it of GLOBAL_CTRLS) buildRow(panel, S, it);
+  S.layers.forEach((L,i)=>{
+    let h=document.createElement('div'); h.className='grp'; h.textContent='Layer '+(i+1)+(L.name?' · '+L.name:'');
+    let x=document.createElement('span'); x.className='x'; x.textContent='✕'; x.title='remove'; x.onclick=()=>removeLayer(i); h.appendChild(x);
+    panel.appendChild(h);
+    for(const it of LAYER_CTRLS) buildRow(panel, L, it);
+  });
+  let add=document.createElement('button'); add.className='addbtn'; add.textContent='+ Add layer'; add.onclick=addLayer; panel.appendChild(add);
+  let hint=document.createElement('div'); hint.className='hint';
+  hint.textContent='Each layer = a disc of stars; Radius sets its spawn size (1 ~ fills the view). Stack shrinking-radius layers → the center overlaps more → naturally denser core, no skewing. Glow/Spikes make a layer bright foreground stars.';
+  panel.appendChild(hint);
+}
+function addLayer(){ S.layers.push(newLayer({name:'New', count:500, radius:0.5})); needsGen=true; buildPanel(); }
+function removeLayer(i){ S.layers.splice(i,1); needsGen=true; buildPanel(); }
+function reseed(){ S.seed=Math.floor(Math.random()*9999); needsGen=true; buildPanel(); }
+window.addEventListener('load',()=>{ document.getElementById('build-pill').textContent=BUILD_ID; document.getElementById('reseed-btn').onclick=reseed; });
+</script>
+</body></html>
