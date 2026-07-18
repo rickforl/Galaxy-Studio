@@ -62,7 +62,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '24';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '28';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -107,8 +107,21 @@ let CFG = {
     gridOn: false, gridColor: [60, 90, 140], gridOpacity: 0.25, gridSpacing: 200, gridWeight: 1,
     // RADIAL FADE (vignette — hides image/nebula edge cutoff)
     fadeOn: true, fadeColor: [4, 5, 9], fadeInner: 0.55, fadeOuter: 1.0, fadeOpacity: 1.0,
+    // PARALLAX (galaxy view) — 1 = locked to the galaxy; lower = farther depth (pans/zooms less), matching the star layers
+    baseParallax: 1, imgParallax: 1, nebParallax: 1, gridParallax: 1, fadeParallax: 1,
     // BAKE INCLUDES — which layers go into the baked backdrop buffer (unchecked = drawn live)
     bake_base: true, bake_img: true, bake_neb: true, bake_grid: false, bake_fade: true
+  },
+  stars: {                                             // layered background starfield (behind the galaxy systems)
+    twSpeed: 1.0,
+    layers: [
+      { name:'Uniform', on:true, bake:true,  uniform:true,  parallax:0.0,  count:1400, radius:1.0,  size:0.9, bright:0.45, color:0.2,  twinkle:0.2,  glow:0,   spikes:false, spikeLen:0 },
+      { name:'Halo',    on:true, bake:true,  uniform:false, parallax:0.08, count:2600, radius:1.05, size:0.9, bright:0.5,  color:0.25, twinkle:0.2,  glow:0,   spikes:false, spikeLen:0 },
+      { name:'Field',   on:true, bake:true,  uniform:false, parallax:0.18, count:550,  radius:1.0,  size:1.6, bright:0.85, color:0.5,  twinkle:0.5,  glow:0,   spikes:false, spikeLen:0 },
+      { name:'Disc',    on:true, bake:true,  uniform:false, parallax:0.32, count:1000, radius:0.8,  size:1.4, bright:0.8,  color:0.45, twinkle:0.45, glow:0,   spikes:false, spikeLen:0 },
+      { name:'Core',    on:true, bake:false, uniform:false, parallax:0.55, count:800,  radius:0.45, size:1.2, bright:0.95, color:0.5,  twinkle:0.4,  glow:0,   spikes:false, spikeLen:0 },
+      { name:'Bright',  on:true, bake:false, uniform:false, parallax:0.85, count:50,   radius:0.7,  size:3.0, bright:1.1,  color:0.6,  twinkle:0.6,  glow:2.0, spikes:true,  spikeLen:3.0 }
+    ]
   },
   lanes: {}, traffic: {}, economy: {}   // filled in later phases
 };
@@ -150,13 +163,14 @@ function setup(){
   regenerate();                 // build the initial galaxy
   updateModeBtn();
 }
-function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
+function windowResized(){ resizeCanvas(windowWidth, windowHeight); invalidateStars(); }
 
 let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
 function draw(){
   stepNebula(CFG.backdrop);                                                    // nebula: hold, then crossfade to the next stepped frame
   if (viewMode === 'galaxy') drawGalaxyView();
   else if (activePage === 'backdrop') drawBackdropPreview();   // isolated backdrop compilation (no sun/stars)
+  else if (activePage === 'stars') drawStarsPreview();         // isolated starfield compilation
   else drawSunPreview();
   updateFps();
 }
@@ -165,7 +179,7 @@ function drawBackdropPreview(){
   let E=bdExtent();
   let playX = PANELW + (width-PANELW)/2, playY = height/2;
   let fit = Math.min(width-PANELW, height) * 0.9 / (2*E);      // fit the 2E square into ~90% of the play area
-  push(); translate(playX, playY); scale(fit); drawBackdrop(); pop();
+  push(); translate(playX, playY); scale(fit); drawBackdrop(false); pop();
   blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
   text('backdrop preview · extent '+Math.round(E)+' · bake '+CFG.backdrop.bakeRes+'²', playX, height-16);
 }
@@ -176,8 +190,101 @@ function drawSunPreview(){
   blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
   text('r = ' + OPTS.previewR + (OPTS.lodOn ? '   (LOD weighting ON)' : ''), cx, height - 16);
 }
+// ---------- Stars (layered background starfield; ported from stars_exhibit) ----------
+const STAR_COLS=[[150,176,255],[200,214,255],[255,255,255],[255,246,214],[255,212,162],[255,168,128]];
+let sfData=[], sfBuf=[], sfDirty=true, sfNeedGen=true;
+function sfField(){ let pw=width-PANELW, ph=height, M=1.5; return { fw:pw*0.5*M, fh:ph*0.5*M, fr:0.5*Math.hypot(pw,ph) }; }   // centered field frame (margined) + radial reference radius
+function sfGenStars(count, seed){ randomSeed(seed); let a=new Array(count);
+  for(let i=0;i<count;i++){ a[i]={ ang:random()*TWO_PI, rr:Math.sqrt(random()), sz:random(), br:random(), ci:Math.floor(random()*STAR_COLS.length), ph:random()*TWO_PI, rate:0.5+random()*1.6, u:random(), v:random() }; }
+  return a; }
+function sfGenAll(){ sfData=CFG.stars.layers.map((L,i)=>sfGenStars(L.count|0, 4242+i*131)); sfNeedGen=false; }
+function invalidateStars(){ sfDirty=true; }
+function sfStarCol(ci,amt){ let b=STAR_COLS[ci]; return [255+(b[0]-255)*amt,255+(b[1]-255)*amt,255+(b[2]-255)*amt]; }
+function sfOpt(L){ return {uniform:L.uniform,radius:L.radius,size:L.size,bright:L.bright,color:L.color,twinkle:L.twinkle,glow:L.glow,spikes:L.spikes,spikeLen:L.spikeLen,speed:CFG.stars.twSpeed}; }
+function sfDrawLayer(P, arr, o, t){
+  if(!arr) return;
+  let dc=P.drawingContext, F=sfField();                    // stars live in a field frame centered at (0,0)
+  let additive=(o.glow>0||o.spikes);
+  if(additive){ P.push(); P.blendMode(ADD); P.noStroke(); }
+  for(const s of arr){
+    let tw=1-o.twinkle*(0.42+0.46*Math.sin(t*o.speed*s.rate+s.ph));
+    let b=o.bright*(0.35+0.65*s.br)*tw; if(b<=0.012) continue;
+    let x,y;
+    if(o.uniform){ x=(s.u-0.5)*2*F.fw; y=(s.v-0.5)*2*F.fh; }
+    else { let rad=o.radius*s.rr*F.fr; x=Math.cos(s.ang)*rad; y=Math.sin(s.ang)*rad; }
+    let col=sfStarCol(s.ci,o.color), sz=o.size*(0.55+0.9*s.sz), a=Math.min(1,b);
+    if(o.glow>0){ let r=sz*o.glow*2.2, g=dc.createRadialGradient(x,y,0,x,y,r); g.addColorStop(0,rgba(col,0.45*a)); g.addColorStop(1,rgba(col,0)); dc.fillStyle=g; dc.beginPath(); dc.arc(x,y,r,0,TWO_PI); dc.fill(); }
+    if(additive){ dc.fillStyle=rgba(col,a); dc.beginPath(); dc.arc(x,y,sz*0.55,0,TWO_PI); dc.fill(); }
+    else { dc.fillStyle=rgba(col,a); dc.fillRect(x-sz/2,y-sz/2,sz,sz); }
+    if(o.spikes&&o.spikeLen>0){ let L2=sz*o.spikeLen, tw2=Math.max(0.6,sz*0.14);
+      let lg=dc.createLinearGradient(x-L2,y,x+L2,y); lg.addColorStop(0,rgba(col,0)); lg.addColorStop(0.5,rgba(col,0.4*b)); lg.addColorStop(1,rgba(col,0)); dc.fillStyle=lg; dc.fillRect(x-L2,y-tw2/2,2*L2,tw2);
+      let vg=dc.createLinearGradient(x,y-L2,x,y+L2); vg.addColorStop(0,rgba(col,0)); vg.addColorStop(0.5,rgba(col,0.4*b)); vg.addColorStop(1,rgba(col,0)); dc.fillStyle=vg; dc.fillRect(x-tw2/2,y-L2,tw2,2*L2); }
+  }
+  if(additive){ P.pop(); P.blendMode(BLEND); }
+}
+function sfBakeLayer(i){                                    // bake a layer into its own field-frame buffer (twinkle frozen)
+  let F=sfField(), W=Math.max(2,Math.round(2*F.fw)), H=Math.max(2,Math.round(2*F.fh));
+  if(!sfBuf[i] || sfBuf[i].width!==W || sfBuf[i].height!==H){ sfBuf[i]=createGraphics(W,H); sfBuf[i].pixelDensity(1); }
+  sfBuf[i].clear(); sfBuf[i].push(); sfBuf[i].translate(F.fw, F.fh);          // field origin -> buffer center
+  sfDrawLayer(sfBuf[i], sfData[i], sfOpt(CFG.stars.layers[i]), millis()*0.001);
+  sfBuf[i].pop();
+}
+function sfRebake(){ for(let i=0;i<CFG.stars.layers.length;i++){ if(CFG.stars.layers[i].on&&CFG.stars.layers[i].bake) sfBakeLayer(i); } }
+function drawStars(camX, camY, camZoom){                    // per-layer parallax: far layers (low parallax) pan/zoom less than near ones
+  if(sfNeedGen){ sfGenAll(); sfDirty=true; }
+  if(sfDirty){ sfRebake(); sfDirty=false; }
+  let t=millis()*0.001, pcx=(PANELW+width)/2, pcy=height/2, F=sfField();
+  let cx=(camX!==undefined)?camX:cam.x, cy=(camY!==undefined)?camY:cam.y, cz=(camZoom!==undefined)?camZoom:cam.zoom;
+  for(let i=0;i<CFG.stars.layers.length;i++){ let L=CFG.stars.layers[i]; if(!L.on) continue;
+    let p=L.parallax, lz=Math.pow(cz, p);                                     // zoom^parallax: p=0 -> no zoom, p=1 -> full galaxy zoom
+    push(); translate(pcx, pcy); translate(cx*lz*p, cy*lz*p); scale(lz);
+    if(L.bake){ if(sfBuf[i]){ imageMode(CENTER); image(sfBuf[i], 0,0, 2*F.fw, 2*F.fh); } }
+    else sfDrawLayer(window, sfData[i], sfOpt(L), t);
+    pop();
+  }
+}
+function drawStarsPreview(){
+  background(3,4,9);
+  drawStars(0,0,1);                                         // flat, un-parallaxed preview
+  blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
+  text('starfield preview · '+CFG.stars.layers.filter(L=>L.on).length+' of '+CFG.stars.layers.length+' layers · parallax shows in VIEW GALAXY (pan/zoom)', PANELW+(width-PANELW)/2, height-16);
+}
+const SF_LAYER_CTRLS=[['on','On','bool'],['bake','Bake','bool'],['uniform','Uniform fill','bool'],['parallax','Parallax','range',0,1,0.01],['count','Count','range',0,5000,20],['radius','Radius','range',0.05,1.4,0.01],
+  ['size','Size','range',0.3,6,0.1],['bright','Bright','range',0,1.5,0.01],['color','Color','range',0,1,0.01],['twinkle','Twinkle','range',0,1,0.01],
+  ['glow','Glow','range',0,4,0.05],['spikes','Spikes','bool'],['spikeLen','Spike len','range',0,6,0.1]];
+function sfBuildRow(parent, target, it){
+  let [key,label,type]=it, row=document.createElement('label'); row.className='row';
+  let lab=document.createElement('span'); lab.className='lab'; lab.textContent=label; row.appendChild(lab);
+  if(type==='range'){
+    let inp=document.createElement('input'); inp.type='range'; inp.min=it[3]; inp.max=it[4]; inp.step=it[5]; inp.value=target[key];
+    let val=document.createElement('span'); val.className='val'; val.textContent=target[key];
+    inp.oninput=()=>{ target[key]=parseFloat(inp.value); val.textContent=inp.value; if(key==='count') sfNeedGen=true; sfDirty=true; };
+    row.appendChild(inp); row.appendChild(val);
+  } else { let inp=document.createElement('input'); inp.type='checkbox'; inp.checked=!!target[key];
+    inp.oninput=()=>{ target[key]=inp.checked; sfDirty=true; }; row.appendChild(inp); }
+  parent.appendChild(row);
+}
+function buildStarsPanel(body){
+  let gh=document.createElement('div'); gh.className='grp'; gh.textContent='Global'; body.appendChild(gh);
+  sfBuildRow(body, CFG.stars, ['twSpeed','Twinkle speed','range',0,3,0.05]);
+  CFG.stars.layers.forEach((L,i)=>{
+    let h=document.createElement('div'); h.className='grp'; h.textContent='Layer '+(i+1)+(L.name?' · '+L.name:'');
+    let x=document.createElement('span'); x.textContent='✕'; x.title='remove'; x.style.cssText='cursor:pointer;color:#c67;float:right';
+    x.onclick=()=>{ CFG.stars.layers.splice(i,1); sfNeedGen=true; sfDirty=true; showPage(); }; h.appendChild(x);
+    body.appendChild(h);
+    for(const it of SF_LAYER_CTRLS) sfBuildRow(body, L, it);
+  });
+  let add=document.createElement('button'); add.className='act-btn'; add.textContent='+ Add layer';
+  add.onclick=()=>{ CFG.stars.layers.push({name:'New',on:true,bake:false,uniform:false,parallax:0.5,count:500,radius:0.5,size:1.4,bright:0.8,color:0.5,twinkle:0.5,glow:0,spikes:false,spikeLen:0}); sfNeedGen=true; sfDirty=true; showPage(); };
+  body.appendChild(add);
+  let hint=document.createElement('div'); hint.className='hint';
+  hint.textContent='Layered background starfield. Radial layers densify the center via disc overlap (Radius = disc size); Uniform fills evenly. Bake a layer for perf (freezes its twinkle). ▶ VIEW GALAXY shows it behind the systems.';
+  body.appendChild(hint);
+}
 function drawGalaxyView(){
   background(4,5,9);
+  drawBackdrop(true);                                       // parallax backdrop (deepest: far nebula/image)
+  drawStars();                                              // starfield, per-layer parallax, in front of the backdrop
   let playX=(PANELW+width)/2, playY=height/2, playW=width-PANELW;
   let hw=playW/(2*cam.zoom), hh=height/(2*cam.zoom);
   let vMinX=-cam.x-hw, vMaxX=-cam.x+hw, vMinY=-cam.y-hh, vMaxY=-cam.y+hh;   // visible world rect (cull)
@@ -185,7 +292,6 @@ function drawGalaxyView(){
   let liveOverlay = baked && ['glow','streamers','bloom','core','rim','prom','embers'].some(L => OPTS[L+'On'] && CFG.sun['bake_'+L]===false);
   push();
   translate(playX, playY); translate(cam.x*cam.zoom, cam.y*cam.zoom); scale(cam.zoom);
-  drawBackdrop();                                            // composite backdrop layers behind the stars
   let drawn=0;
   for(const s of galaxy){
     let wr = CFG.gen.starSize * (1 + (s.tier-1)*0.35);        // world star radius by tier
@@ -392,10 +498,12 @@ function bakeBdLayer(L, E, res){                                              //
   b.pop();
   return b;
 }
-function drawBackdrop(){                                                      // called inside a transform; composites layers in stack order
-  let E=bdExtent(), res=CFG.backdrop.bakeRes|0, B=CFG.backdrop;
+function drawBackdrop(parallax){                                              // parallax=true: per-layer parallax transform (galaxy view); false: caller's transform (preview)
+  let E=bdExtent(), res=CFG.backdrop.bakeRes|0, B=CFG.backdrop, pcx=(PANELW+width)/2, pcy=height/2;
   for(const L of BD_LAYERS){
     if(!B[L+'On']) continue;
+    if(parallax){ let p=(B[L+'Parallax']!==undefined?B[L+'Parallax']:1), lz=Math.pow(cam.zoom,p);
+      push(); translate(pcx,pcy); translate(cam.x*lz*p, cam.y*lz*p); scale(lz); }   // p=1 -> locked to galaxy; lower -> farther
     if(B['bake_'+L]!==false){                                                 // baked: blit this layer's own buffer (rebuild if dirty/resized)
       let b=bdBuf[L];
       if(bdDirty || !b || b.width!==res || (L==='neb' && nebFading)) b=bakeBdLayer(L, E, res);   // re-bake neb each frame during the crossfade
@@ -403,6 +511,7 @@ function drawBackdrop(){                                                      //
     } else {                                                                  // live: draw directly, at its position in the stack
       drawOneBdLayer(window, E, L);
     }
+    if(parallax){ pop(); }
   }
   bdDirty=false;
 }
@@ -413,14 +522,22 @@ function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = con
 function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); }
 function updateModeBtn(){ let b=document.getElementById('mode-btn'); if(b) b.innerHTML = (viewMode==='options') ? '&#9654; VIEW GALAXY' : '&#9664; OPTIONS'; }
 function exportCFG(){
-  let blob=new Blob([JSON.stringify(CFG,null,2)],{type:'application/json'});
+  let out = Object.assign({}, CFG, { view:{ camX:cam.x, camY:cam.y, camZoom:cam.zoom, preset:ACTIVE_PRESET } });   // full snapshot: all CFG + galaxy framing + sun preset
+  let blob=new Blob([JSON.stringify(out,null,2)],{type:'application/json'});
   let a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='galaxy_cfg.json'; a.click();
 }
 function importCFG(file){
   let rd=new FileReader();
   rd.onload=()=>{ try{ let c=JSON.parse(rd.result);
     for(const sec in CFG){ if(c[sec]) Object.assign(CFG[sec], c[sec]); }
-    invalidateSunSprites(); invalidateBackdrop();
+    if(c.view){                                             // restore framing + preset (state kept outside CFG)
+      if(typeof c.view.camX==='number') cam.x=c.view.camX;
+      if(typeof c.view.camY==='number') cam.y=c.view.camY;
+      if(typeof c.view.camZoom==='number') cam.zoom=c.view.camZoom;
+      if(c.view.preset && PRESETS[c.view.preset]){ ACTIVE_PRESET=c.view.preset;   // display only — do NOT applyPreset (would clobber imported sun values)
+        let tag=document.getElementById('preset-tag'); if(tag) tag.textContent='· '+(PRESET_LABELS[c.view.preset]||c.view.preset); }
+    }
+    invalidateSunSprites(); invalidateBackdrop(); sfNeedGen=true; sfDirty=true;
     showPage();
   }catch(err){ alert('Bad config JSON: '+err.message); } };
   rd.readAsText(file);
@@ -664,12 +781,14 @@ const BACKDROP_SCHEMA = [
     ['gridSpacing','Spacing','range',50,600,10],['gridWeight','Line weight','range',0.5,4,0.5]]],
   ['Radial fade (hide edges)', [['fadeOn','Fade','bool'],['fadeColor','Edge color','color'],
     ['fadeInner','Inner','range',0,1,0.01],['fadeOuter','Outer','range',0.2,1.5,0.01],['fadeOpacity','Opacity','range',0,1,0.01]]],
+  ['Parallax (galaxy view)', [['imgParallax','Image','range',0,1,0.01],['nebParallax','Nebula','range',0,1,0.01],['baseParallax','Base','range',0,1,0.01],['gridParallax','Grid','range',0,1,0.01],['fadeParallax','Fade','range',0,1,0.01]]],
   ['Bake includes (off = drawn live)', [['bake_base','Base','bool'],['bake_img','Image','bool'],['bake_neb','Nebula','bool'],['bake_grid','Grid','bool'],['bake_fade','Fade','bool']]]
 ];
 const PAGES = [
   { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true, onChange: invalidateSunSprites },
   { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: regenerate },
   { id:'backdrop', label:'Backdrop',   schema: BACKDROP_SCHEMA, target: ()=>CFG.backdrop, onChange: invalidateBackdrop },
+  { id:'stars',    label:'Stars',      schema: [], target: ()=>CFG.stars, custom:'stars' },
   { id:'lanes',    label:'Lanes',      schema: [],         target: ()=>CFG.lanes },
   { id:'traffic',  label:'Traffic',    schema: [],         target: ()=>CFG.traffic },
   { id:'economy',  label:'Economy',    schema: [],         target: ()=>CFG.economy }
@@ -692,6 +811,7 @@ function showPage(){
   let body=document.getElementById('pagebody'); body.innerHTML=''; controls={}; presetSel=null;
   let page=PAGES.find(p=>p.id===activePage);
   if(page.presets) buildPresetRow(body);
+  if(page.custom==='stars'){ buildStarsPanel(body); return; }
   if(!page.schema.length){
     let note=document.createElement('div'); note.className='hint';
     note.textContent='No options here yet — this page fills in a later phase.';
