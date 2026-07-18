@@ -30,7 +30,7 @@
 </div>
 <div id="panel"></div>
 <script>
-const BUILD_DATE='20260718', BUILD_SEQ='02', BUILD_ID='bolt_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+const BUILD_DATE='20260718', BUILD_SEQ='03', BUILD_ID='bolt_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
 const PANELW=252, TOPH=31;
 
 let X = {
@@ -42,7 +42,7 @@ let X = {
   animMode:'flicker', flickerRate:2, strikePeriod:1.4, strikeDuty:0.45, strikeDecay:1.6,
   showSource:true, sourceSize:7
 };
-const OPT_LAYOUT=[['radial','Radial (plasma ball)'],['down','Down (strike)'],['random','Random spray'],['chain','Chain (zig-zag)']];
+const OPT_LAYOUT=[['radial','Radial (plasma ball)'],['tesla','Tesla coil (rod)'],['p2p','Point to point'],['down','Down (strike)'],['random','Random spray'],['chain','Chain (zig-zag)']];
 const OPT_ANIM=[['flicker','Flicker (crackle)'],['steady','Steady (frozen)'],['strike','Strike (flash + decay)']];
 const SCHEMA=[
   ['Emitter', [['seed','Seed','range',0,9999,1],['layout','Layout','select',OPT_LAYOUT],['bolts','Bolts','range',1,40,1],['boltLength','Length','range',60,600,10],['spread','Spread','range',0,2,0.05],['sourceJitter','Src jitter','range',0,1,0.02],['bg','Background','color']]],
@@ -55,16 +55,17 @@ const SCHEMA=[
 const PRESETS={
   plasma:  {name:'01 plasma ball', ov:{layout:'radial',bolts:10,boltLength:320,rough:0.5,detail:5,branchChance:0.35,maxDepth:3,branchCount:3,glowColor:[90,150,255],coreColor:[230,245,255],glowW:6,glowLayers:4,animMode:'flicker',flickerRate:2,sag:0,bg:[3,4,12]}},
   strike:  {name:'02 storm strike', ov:{layout:'down',bolts:2,boltLength:400,rough:0.42,detail:6,sag:0.35,branchChance:0.32,maxDepth:4,branchLen:0.5,glowColor:[150,180,255],coreColor:[245,250,255],glowW:7,glowLayers:5,animMode:'strike',strikePeriod:1.8,strikeDuty:0.25,strikeDecay:2.2,sourceJitter:0.5,bg:[2,3,9]}},
-  tesla:   {name:'03 tesla coil', ov:{layout:'radial',bolts:16,boltLength:260,rough:0.6,detail:5,branchChance:0.35,maxDepth:3,branchTaper:0.55,glowColor:[170,110,255],coreColor:[240,225,255],coreW:1,glowW:4,glowLayers:3,glowOpacity:0.45,animMode:'flicker',flickerRate:1,bg:[4,2,10]}},
+  tesla:   {name:'03 tesla coil', ov:{layout:'tesla',bolts:10,boltLength:330,spread:0.9,rough:0.55,detail:5,branchChance:0.32,maxDepth:3,branchCount:3,branchTaper:0.55,glowColor:[170,110,255],coreColor:[240,225,255],coreW:1,glowW:4,glowLayers:3,glowOpacity:0.45,animMode:'flicker',flickerRate:1,sourceSize:9,bg:[4,2,10]}},
   arc:     {name:'04 single arc', ov:{layout:'chain',bolts:1,boltLength:420,rough:0.55,detail:6,branchChance:0.22,maxDepth:3,glowColor:[110,200,255],coreColor:[235,250,255],coreW:1.6,glowW:8,glowLayers:5,animMode:'flicker',flickerRate:3,bg:[3,5,12]}},
   web:     {name:'05 branchy web', ov:{layout:'radial',bolts:6,boltLength:300,rough:0.55,detail:5,branchChance:0.55,maxDepth:4,branchCount:4,branchLen:0.6,branchTaper:0.7,glowColor:[100,255,210],coreColor:[235,255,250],coreW:1,glowW:3,glowLayers:3,animMode:'flicker',flickerRate:2,bg:[2,7,8]}},
-  calm:    {name:'06 frozen bolt', ov:{layout:'radial',bolts:7,boltLength:300,rough:0.5,detail:5,branchChance:0.28,maxDepth:3,glowColor:[90,150,255],coreColor:[230,245,255],glowW:6,glowLayers:4,animMode:'steady'}}
+  calm:    {name:'06 frozen bolt', ov:{layout:'radial',bolts:7,boltLength:300,rough:0.5,detail:5,branchChance:0.28,maxDepth:3,glowColor:[90,150,255],coreColor:[230,245,255],glowW:6,glowLayers:4,animMode:'steady'}},
+  spark:   {name:'07 spark gap (p2p)', ov:{layout:'p2p',bolts:4,rough:0.45,detail:6,branchChance:0.2,maxDepth:2,branchCount:2,glowColor:[130,200,255],coreColor:[240,250,255],coreW:1.4,glowW:7,glowLayers:5,glowOpacity:0.4,animMode:'flicker',flickerRate:2,sourceSize:8,bg:[3,5,12]}}
 };
 let activePreset='plasma';
 
 // ---- generation ----
 let _rs=1; function rseed(n){ _rs=(n>>>0)||1; } function rand(){ _rs=(_rs*1664525+1013904223)>>>0; return _rs/4294967296; }
-let strokes=[], src={x:0,y:0}, needsBuild=true, lastStrike=-999;
+let strokes=[], src={x:0,y:0}, rod=null, poles=[], needsBuild=true, lastStrike=-999;
 function playRect(){ return { x:PANELW, y:TOPH, w:width-PANELW, h:height-TOPH }; }
 function jaggedPath(sx,sy,ex,ey, iters){
   let pts=[{x:sx,y:sy},{x:ex,y:ey}];
@@ -85,14 +86,18 @@ function genBolt(sx,sy,ex,ey, depth, w){
       genBolt(p.x,p.y, p.x+Math.cos(ang)*len, p.y+Math.sin(ang)*len, depth+1, w*X.branchTaper); } } }
 }
 function build(seedVal){
-  rseed(seedVal|0); strokes=[];
-  let R=playRect(), cx=R.x+R.w/2, cy=R.y+R.h/2; src={x:cx,y:cy};
-  let N=X.bolts|0;
-  if(X.layout==='down'){ let topY=R.y+R.h*0.08, botY=R.y+R.h*0.94; src={x:cx,y:topY};
+  rseed(seedVal|0); strokes=[]; rod=null; poles=[];
+  let R=playRect(), cx=R.x+R.w/2, cy=R.y+R.h/2, N=X.bolts|0; src={x:cx,y:cy};
+  if(X.layout==='down'){ let topY=R.y+R.h*0.08, botY=R.y+R.h*0.94; src={x:cx,y:topY}; poles=[src];
     for(let i=0;i<N;i++){ let sx=cx+(rand()*2-1)*R.w*0.18*X.sourceJitter, ex=cx+(rand()*2-1)*R.w*0.42*X.spread; genBolt(sx,topY,ex,botY,0,1); } }
-  else if(X.layout==='chain'){ src={x:R.x+R.w*0.12,y:cy};
+  else if(X.layout==='chain'){ src={x:R.x+R.w*0.12,y:cy}; poles=[src];
     for(let i=0;i<N;i++){ let sy=cy+(rand()*2-1)*R.h*0.3*X.spread; genBolt(R.x+R.w*0.1, sy, R.x+R.w*0.9, cy+(rand()*2-1)*R.h*0.3*X.spread, 0, 1); } }
-  else { for(let i=0;i<N;i++){ let a=(X.layout==='random')? rand()*TWO_PI : (i/N)*TWO_PI+(rand()*2-1)*0.3*X.spread; let len=X.boltLength*(0.65+0.6*rand()); genBolt(cx,cy, cx+Math.cos(a)*len, cy+Math.sin(a)*len, 0, 1); } }
+  else if(X.layout==='tesla'){ let topY=R.y+R.h*0.36, botY=R.y+R.h*0.97; src={x:cx,y:topY}; rod={x:cx,top:topY,bot:botY}; poles=[src];   // streamers fan up/out from the toroid
+    for(let i=0;i<N;i++){ let a=-Math.PI/2 + (rand()*2-1)*1.4*X.spread, len=X.boltLength*(0.55+0.7*rand()); genBolt(cx,topY, cx+Math.cos(a)*len, topY+Math.sin(a)*len, 0, 1); } }
+  else if(X.layout==='p2p'){ let lx=R.x+R.w*0.22, rx=R.x+R.w*0.78; src={x:lx,y:cy}; poles=[{x:lx,y:cy},{x:rx,y:cy}];   // arcs bridge two electrodes
+    for(let i=0;i<N;i++) genBolt(lx,cy, rx,cy, 0, 1); }
+  else { poles=[src];
+    for(let i=0;i<N;i++){ let a=(X.layout==='random')? rand()*TWO_PI : (i/N)*TWO_PI+(rand()*2-1)*0.3*X.spread; let len=X.boltLength*(0.65+0.6*rand()); genBolt(cx,cy, cx+Math.cos(a)*len, cy+Math.sin(a)*len, 0, 1); } }
   needsBuild=false;
 }
 
@@ -116,11 +121,15 @@ function draw(){
     alpha = tt<aw ? Math.pow(1-tt/aw, X.strikeDecay) : 0; }
   background(X.bg[0],X.bg[1],X.bg[2]);
   let dc=drawingContext;
+  if(rod){ dc.strokeStyle='rgba(95,110,145,0.9)'; dc.lineWidth=Math.max(3,X.sourceSize*0.55); dc.lineCap='round';   // the coil rod (behind the bolts)
+    dc.beginPath(); dc.moveTo(rod.x,rod.bot); dc.lineTo(rod.x,rod.top+X.sourceSize*0.6); dc.stroke();
+    dc.fillStyle='rgba(120,135,175,0.95)'; dc.beginPath(); dc.ellipse(rod.x,rod.top,X.sourceSize*2.4,X.sourceSize*0.95,0,0,TWO_PI); dc.fill(); }   // top toroid
   push(); blendMode(ADD);
   for(const s of strokes) drawStroke(s, alpha);
-  if(X.showSource && alpha>0.02){ let r=X.sourceSize; let g=dc.createRadialGradient(src.x,src.y,0,src.x,src.y,r*2.4);
-    g.addColorStop(0,rgba(X.coreColor,0.9*alpha)); g.addColorStop(0.4,rgba(X.glowColor,0.6*alpha)); g.addColorStop(1,rgba(X.glowColor,0)); dc.fillStyle=g; dc.beginPath(); dc.arc(src.x,src.y,r*2.4,0,TWO_PI); dc.fill();
-    dc.fillStyle=rgba(X.coreColor,alpha); dc.beginPath(); dc.arc(src.x,src.y,r*0.5,0,TWO_PI); dc.fill(); }
+  if(X.showSource && alpha>0.02){ let r=X.sourceSize;
+    for(const pl of poles){ let g=dc.createRadialGradient(pl.x,pl.y,0,pl.x,pl.y,r*2.4);
+      g.addColorStop(0,rgba(X.coreColor,0.9*alpha)); g.addColorStop(0.4,rgba(X.glowColor,0.6*alpha)); g.addColorStop(1,rgba(X.glowColor,0)); dc.fillStyle=g; dc.beginPath(); dc.arc(pl.x,pl.y,r*2.4,0,TWO_PI); dc.fill();
+      dc.fillStyle=rgba(X.coreColor,alpha); dc.beginPath(); dc.arc(pl.x,pl.y,r*0.5,0,TWO_PI); dc.fill(); } }
   pop(); blendMode(BLEND);
   if(millis()-fpsT>400){ fpsT=millis(); lastFps=Math.round(frameRate());
     document.getElementById('stat').textContent=strokes.length+' arcs · '+lastFps+' fps · '+BUILD_ID; }
