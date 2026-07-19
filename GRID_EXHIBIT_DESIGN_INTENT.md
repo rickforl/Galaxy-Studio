@@ -6,10 +6,11 @@ decisions*, not implementation detail (read `grid_exhibit.html` for the running
 model). Status tags: **[BUILT]** in the exhibit · **[DECIDED]** agreed, not yet
 canonical · **[TBD]** open.
 
-**Anchor:** `grid_v0.1_20260718.06` — square/polar/hex grids · cell + line labelling ·
+**Anchor:** `grid_v0.1_20260718.09` — square/polar/hex grids · cell + line labelling ·
 per-axis invert · line numbering + subdivisions · label placement (anchor / offset /
 polar 0° orientation / spoke-line vs midpoint) · radial labels (letters / degrees /
-magnetic bearings).
+magnetic bearings) · isometric floor (yaw / pitch) · hex axial `(q,r)` · screen-edge axis
+labels · independent major/minor color + brightness + opacity + line style.
 
 ## Why this exists
 
@@ -26,14 +27,17 @@ where the user happens to be looking.
 
 ## Grid families **[BUILT]**
 
-Three candidate frames, switchable live — we haven't committed to which becomes canonical:
+Four candidate frames, switchable live — we haven't committed to which becomes canonical:
 
 - **Square (Cartesian)** — the workhorse. `x,y` lattice, the natural fit for A1-style
   sector references and the galaxy_01 heritage (fixed lattice, sector border).
 - **Polar (rings + spokes)** — radius/bearing. Reads as a radar / galactic-longitude
   frame; sectors become ring × spoke wedges.
-- **Hex tiles** — pointy- or flat-top. Equidistant neighbours; a tiling frame rather
-  than a labelling one (no coord scheme wired yet).
+- **Hex tiles** — pointy- or flat-top. Equidistant neighbours, and now an **addressable**
+  frame too: carries an axial `(q,r)` scheme (see *Hex axial coordinates*).
+- **Isometric (3D floor)** — the square lattice projected on a 30° ground plane (yaw +
+  pitch controls), for auditioning the frame as a tilted map floor. A *view* of the square
+  frame, not a new coordinate scheme; the circular galaxy edge reads as an ellipse floor.
 
 ## Line tiers (square) **[BUILT]**
 
@@ -45,6 +49,23 @@ Three weights, so structure is legible at a glance without reading numbers:
 - **Subdivision** — `Subdivisions` (1–10) inserts finer lines *inside* each base cell,
   drawn faint and **only when they're legible** (auto-hidden once they'd turn to mud on
   zoom-out). These are visual density only — not part of the coordinate count.
+
+### Major / minor appearance **[BUILT]**
+
+The **major** and **minor** tiers are styled independently now, not just weighted:
+
+- **Two colors** — `Major color` (also drives the axis) and `Minor color`, each its own
+  hue. The minor lattice additionally carries **brightness** (scales its RGB) and its own
+  **opacity**, so it can read as a faint wash under bold majors — or flip the emphasis.
+- **Two line styles** — `Major style` and `Minor style` each pick solid / dashed / dotted /
+  dash-dot (sharing one `Dash scale`). Solid majors over dashed minors, for instance, reads
+  like engineering graph paper.
+
+The split is **not square-only** — it maps onto every family: **polar** uses the major
+color/style for the emphasised (5th) rings and the minor for the base rings + spokes;
+**isometric** mirrors the square tiers on the floor plane; **hex** is single-tier and
+follows the **major** color/style. Presets that don't name a `Minor color` inherit the
+major hue, so they stay coherent until deliberately split.
 
 ## Labelling — cells vs lines **[BUILT]**
 
@@ -99,6 +120,13 @@ Where a label sits is its own axis of control, separate from what it says:
   boundary) or the centre of the wedge between spokes (the actual sector). Sector letters
   read more naturally at midpoints; bearings read more naturally on the line.
 
+- **Axis labels: on-axis vs screen-edge** (`Coords at edge`) — for the **World-coords**
+  and **Line-numbers** modes, the numbers either sit *on* the `x=0` / `y=0` axes (default)
+  or **pin to the screen edge**: X numbers to the bottom rail, Y numbers to the left rail
+  (offset past the panel/topbar), each still tracking its own grid line. Edge-pinning keeps
+  the readout on screen when the origin is panned away — the `canvas_ideal_game_look`
+  `coordsAtEdges` convention. Ships **on** in the **Tactical** preset.
+
 Rationale: the future coordinate system has to make deliberate choices about label
 convention (which corner, which direction is "up", spoke vs sector). Keeping placement
 independent from content lets us audition every combination before committing.
@@ -120,6 +148,26 @@ spoke is pointed (it reads the spoke's *actual* direction, not its index). The t
 modes are kept visually distinct on purpose: `045°` (relative, suffixed) vs `045`
 (absolute, 3-digit). The **Radar** preset ships as magnetic + North-up so it behaves like
 a real compass scope.
+
+## Hex axial coordinates **[BUILT]**
+
+Hex is an addressable frame now, not just tiling. Each hex carries an **axial `(q,r)`**
+label, derived from the renderer's own offset layout:
+
+- **Pointy-top:** `q = col − floor(row/2)`, `r = row`
+- **Flat-top:** `q = col`, `r = row − floor(col/2)`
+
+**Center-origin, not edge-anchored.** Unlike the square sector/index/line modes (which
+count from the galaxy edge inward), hex uses the standard axial convention with `0,0` at
+the **core** (world origin). That still honours the "stable zero" rule — the core doesn't
+move when the galaxy grows, it just gains rings — and it keeps the numbers recognisable as
+canonical axial (the True Zen heritage). Labels render only inside the boundary and only
+once hexes are big enough to read (auto-hidden on zoom-out). Ships as the **Hex axial
+(q,r)** preset. This makes hex directly comparable to square/polar for the
+canonical-family decision below.
+
+*Open:* whether hex should also get a friendly sector name (a letter-ring like the polar
+frame) layered on top of raw `(q,r)` — tied to the sector-naming question below.
 
 ## Context layer **[BUILT]**
 

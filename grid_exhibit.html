@@ -31,21 +31,24 @@
 </div>
 <div id="panel"></div>
 <script>
-const BUILD_DATE='20260718', BUILD_SEQ='06', BUILD_ID='grid_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+const BUILD_DATE='20260718', BUILD_SEQ='09', BUILD_ID='grid_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
 const PANELW=256, TOPH=31;
 
 // ---------- config ----------
 let G = {
   type:'polar',
-  color:[70,140,210], opacity:0.5, weight:1, bg:[6,10,18],
-  radius:1000, showBoundary:true, boundaryColor:[110,200,255], boundaryOpacity:0.85, showOrigin:true, clip:false,
+  color:[70,140,210], opacity:0.5, weight:1, bg:[6,10,18], majorStyle:'solid', minorStyle:'solid', dashScale:1,   // color = MAJOR line color (opacity drives major + axis); major/minor line style each: solid | dashed | dotted | dashdot (dashScale tunes pattern size)
+  minorColor:[70,140,210], minorBright:1, minorOpacity:0.35,   // minor/base lattice color, independent of major; minorBright scales its RGB, minorOpacity its alpha (also drives subdivisions / base rings / iso base lines)
+  radius:1000, showBoundary:true, boundaryShape:'circle', boundaryPad:0, gridInset:0, labelRingPad:0, boundaryColor:[110,200,255], boundaryOpacity:0.85, showOrigin:true, clip:false,   // boundaryPad=A (edge out from radius), gridInset=B (grid/labels in from edge), labelRingPad=C (polar label ring)
   // square
   sqSpacing:150, sqMajor:5, sqSubdiv:1, sqLabelMode:'coord', invertX:false, invertY:false,   // world | coord (A1 sectors) | index (col,row) | line (numbered grid lines); invert = count that axis the other way
-  lineNumMajor:true, lineNumMinor:false,   // line-numbers mode: which line tiers get numbered
+  lineNumMajor:true, lineNumMinor:false, edgeLabels:false,   // line-numbers mode: which line tiers get numbered; edgeLabels = pin World-coord #s to the screen bottom/left instead of on the axes
   // polar
   ringSpacing:150, spokeCount:12, angleOffset:0,
   // hex
   hexSize:110, hexFlat:false,
+  // iso
+  isoRot:0, isoPitch:1,   // isometric floor: yaw spin (deg) + vertical squash (1 = classic 30° 2:1 iso, from fleet-parade toIso)
   // labels
   labels:true, labelColor:[150,200,235], labelSize:11, radialMode:'letters',   // polar radial labels: letters | degrees (relative) | magnetic (compass bearing, CW from N)
   labelPos:'center', labelOffX:0, labelOffY:0,   // square cell-label anchor (9-pos) + universal pixel nudge
@@ -58,29 +61,49 @@ const PRESETS = {
   radar:    {name:'Radar (polar)', ov:{type:'polar',color:[60,200,150],opacity:0.4,ringSpacing:150,spokeCount:12,labels:true,radialMode:'magnetic',polarZero:'north',boundaryColor:[110,255,200],showBoundary:true}},
   galactic: {name:'Galactic sectors (polar)', ov:{type:'polar',color:[90,150,230],opacity:0.4,ringSpacing:120,spokeCount:16,labels:true,radialMode:'letters',angleOffset:0,boundaryColor:[130,180,255]}},
   hexsect:  {name:'Hex sectors', ov:{type:'hex',color:[220,170,90],opacity:0.4,hexSize:120,hexFlat:false,labels:false,boundaryColor:[255,200,120]}},
-  minimal:  {name:'Minimal (faint square)', ov:{type:'square',color:[80,110,150],opacity:0.22,weight:1,sqSpacing:200,sqMajor:4,labels:false,showBoundary:false}}
+  hexaxial: {name:'Hex axial (q,r)', ov:{type:'hex',color:[220,170,90],opacity:0.45,hexSize:130,hexFlat:false,labels:true,labelSize:11,labelColor:[245,215,150],boundaryColor:[255,200,120]}},
+  minimal:  {name:'Minimal (faint square)', ov:{type:'square',color:[80,110,150],opacity:0.22,weight:1,sqSpacing:200,sqMajor:4,labels:false,showBoundary:false}},
+  // --- mined from the EPIC archive (see GRID_VARIATIONS_CATALOG.md) ---
+  graphpaper:{name:'Graph paper (square)', ov:{type:'square',color:[90,130,170],opacity:0.5,weight:1,sqSpacing:60,sqMajor:5,sqSubdiv:1,sqLabelMode:'line',lineNumMajor:true,lineNumMinor:true,labels:true,showBoundary:false,showSystems:false}},
+  tactical:  {name:'Tactical (world coords)', ov:{type:'square',color:[80,180,140],opacity:0.4,weight:1,sqSpacing:120,sqMajor:5,sqLabelMode:'world',edgeLabels:true,labels:true,showBoundary:true,boundaryShape:'square',boundaryColor:[120,255,200]}},
+  deepspace: {name:'Deep-space (dotted, faint)', ov:{type:'square',color:[110,130,170],opacity:0.3,majorStyle:'dotted',minorStyle:'dotted',dashScale:1.4,sqSpacing:100,sqMajor:5,labels:false,showBoundary:false,showOrigin:false}},
+  navscope:  {name:'Nav scope (compass, dense)', ov:{type:'polar',color:[60,210,160],opacity:0.45,ringSpacing:100,spokeCount:24,labels:true,radialMode:'magnetic',polarZero:'north',polarLabelAt:'line',boundaryColor:[110,255,200],showBoundary:true}},
+  longitude: {name:'Galactic longitude (wedges)', ov:{type:'polar',color:[130,150,240],opacity:0.4,ringSpacing:140,spokeCount:12,labels:true,radialMode:'letters',polarLabelAt:'mid',angleOffset:15,boundaryColor:[150,170,255]}},
+  isofloor:  {name:'Isometric floor', ov:{type:'iso',color:[120,180,240],opacity:0.4,weight:1,sqSpacing:150,sqMajor:5,isoRot:0,isoPitch:1,sqLabelMode:'coord',labels:false,showBoundary:true,boundaryColor:[150,190,255]}}
 };
 let curPreset='galactic';
-const OPT_TYPE=[['square','Square (Cartesian)'],['polar','Polar (rings + spokes)'],['hex','Hex tiles']];
+const OPT_TYPE=[['square','Square (Cartesian)'],['polar','Polar (rings + spokes)'],['hex','Hex tiles'],['iso','Isometric (3D floor)']];
+const OPT_STYLE=[['solid','Solid'],['dashed','Dashed'],['dotted','Dotted'],['dashdot','Dash-dot']];
 const SCHEMA = [
-  ['Grid', [['type','Type','select',OPT_TYPE],['color','Line color','color'],['opacity','Opacity','range',0,1,0.01],['weight','Weight','range',0.25,4,0.25],['bg','Background','color']]],
-  ['Boundary (galaxy edge)', [['showBoundary','Boundary','bool'],['radius','Radius','range',200,4000,50],['boundaryColor','Color','color'],['boundaryOpacity','Opacity','range',0,1,0.01],['clip','Clip grid to it','bool'],['showOrigin','Origin marker','bool']]],
-  ['Square', [['sqSpacing','Spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1],['sqSubdiv','Subdivisions','range',1,10,1],['sqLabelMode','Label mode','select',[['world','World coords'],['coord','Sectors (A1)'],['index','Cell index'],['line','Line numbers']]],['lineNumMajor','Number major lines','bool'],['lineNumMinor','Number minor lines','bool'],['invertX','Invert cols (X)','bool'],['invertY','Invert rows (Y)','bool']]],
+  ['Grid', [['type','Type','select',OPT_TYPE],['color','Major color','color'],['opacity','Major opacity','range',0,1,0.01],['minorColor','Minor color','color'],['minorBright','Minor bright','range',0.2,2.5,0.05],['minorOpacity','Minor opacity','range',0,1,0.01],['weight','Weight','range',0.25,4,0.25],['majorStyle','Major style','select',OPT_STYLE],['minorStyle','Minor style','select',OPT_STYLE],['dashScale','Dash scale','range',0.3,4,0.1],['bg','Background','color']]],
+  ['Boundary (galaxy edge)', [['showBoundary','Boundary','bool'],['boundaryShape','Shape','select',[['circle','Circle'],['square','Square']]],['radius','Radius','range',200,4000,50],['boundaryPad','Edge padding','range',-400,1200,10],['gridInset','Grid inset','range',0,800,10],['labelRingPad','Label ring','range',-200,300,5],['boundaryColor','Color','color'],['boundaryOpacity','Opacity','range',0,1,0.01],['clip','Clip grid to it','bool'],['showOrigin','Origin marker','bool']]],
+  ['Square', [['sqSpacing','Spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1],['sqSubdiv','Subdivisions','range',1,10,1],['sqLabelMode','Label mode','select',[['world','World coords'],['coord','Sectors (A1)'],['index','Cell index'],['line','Line numbers']]],['edgeLabels','Coords at edge','bool'],['lineNumMajor','Number major lines','bool'],['lineNumMinor','Number minor lines','bool'],['invertX','Invert cols (X)','bool'],['invertY','Invert rows (Y)','bool']]],
   ['Polar', [['ringSpacing','Ring spacing','range',30,600,10],['spokeCount','Spokes','range',0,48,1],['angleOffset','Angle offset','range',0,360,1]]],
   ['Hex', [['hexSize','Hex size','range',30,400,5],['hexFlat','Flat-top','bool']]],
+  ['Isometric', [['isoRot','Yaw / spin','range',0,360,5],['isoPitch','Pitch (squash)','range',0.2,1.4,0.05],['sqSpacing','Floor spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1]]],
   ['Labels', [['labels','Labels','bool'],['radialMode','Radial labels','select',[['letters','Letters (A,B,C)'],['degrees','Degrees'],['magnetic','Magnetic radials']]],['labelColor','Color','color'],['labelSize','Size','range',8,20,1]]],
   ['Label placement', [['labelPos','Cell anchor','select',[['center','Center'],['top','Top'],['bottom','Bottom'],['left','Left'],['right','Right'],['tl','Top-left'],['tr','Top-right'],['bl','Bottom-left'],['br','Bottom-right']]],['labelOffX','Offset X','range',-30,30,1],['labelOffY','Offset Y','range',-30,30,1],['polarZero','Polar 0° at','select',[['east','East →'],['north','North ↑'],['west','West ←'],['south','South ↓']]],['polarLabelAt','Polar labels','select',[['line','On spoke line'],['mid','Wedge midpoint']]]]],
   ['Context', [['showSystems','Show systems','bool'],['systemCount','Count','range',0,300,5],['systemSeed','Seed','range',1,9999,1]]]
 ];
 
 // ---------- camera / projection ----------
-let cam={x:0,y:0,zoom:0.5};
+let cam={x:0,y:0,zoom:0.20};   // startup zoom (Recenter button re-fits to the boundary)
 function cx(){ return PANELW+(width-PANELW)/2; }
 function cy(){ return height/2; }
 function w2s(wx,wy){ let z=cam.zoom; return { x:cx()+(cam.x+wx)*z, y:cy()+(cam.y+wy)*z }; }
 function visibleWorld(){ let z=cam.zoom, X=cx(), Y=cy();
   return { x0:(PANELW-X)/z-cam.x, x1:(width-X)/z-cam.x, y0:(0-Y)/z-cam.y, y1:(height-Y)/z-cam.y }; }
-function recenter(){ cam.x=0; cam.y=0; cam.zoom=constrain(Math.min(Math.max(1,width-PANELW),Math.max(1,height))*0.42/G.radius, 0.05, 8); }
+function recenter(){ let r=rbEdge()*(G.type==='iso'?1.3:1); cam.x=0; cam.y=0; cam.zoom=constrain(Math.min(Math.max(1,width-PANELW),Math.max(1,height))*0.42/r, 0.05, 8); }
+// ---------- isometric projection (30° floor, matches fleet-parade toIso: isoX=(x-y)cos30, isoY=(x+y)sin30 - z) ----------
+const ISO_COS=Math.cos(Math.PI/6), ISO_SIN=Math.sin(Math.PI/6);
+function iso2s(wx,wy,wz){ let a=G.isoRot*Math.PI/180, rx=wx*Math.cos(a)-wy*Math.sin(a), ry=wx*Math.sin(a)+wy*Math.cos(a);   // yaw first, then project through the same camera as w2s
+  let ix=(rx-ry)*ISO_COS, iy=(rx+ry)*ISO_SIN*G.isoPitch-(wz||0), z=cam.zoom;
+  return { x:cx()+(cam.x+ix)*z, y:cy()+(cam.y+iy)*z }; }
+function proj(wx,wy){ return G.type==='iso' ? iso2s(wx,wy,0) : w2s(wx,wy); }   // active projector: systems/origin/boundary follow the grid family
+function drawProjBoundary(r,colStr,lw){ let dc=drawingContext; dc.strokeStyle=colStr; dc.lineWidth=lw; dc.beginPath();
+  if(G.boundaryShape==='square'){ let p=[[-r,-r],[r,-r],[r,r],[-r,r]]; for(let i=0;i<4;i++){ let s=iso2s(p[i][0],p[i][1],0); i?dc.lineTo(s.x,s.y):dc.moveTo(s.x,s.y); } dc.closePath(); }
+  else { for(let i=0;i<=64;i++){ let ang=i/64*Math.PI*2, s=iso2s(Math.cos(ang)*r,Math.sin(ang)*r,0); i?dc.lineTo(s.x,s.y):dc.moveTo(s.x,s.y); } }
+  dc.stroke(); }
 
 // ---------- systems (placeholder galaxy for context) ----------
 let systems=[];
@@ -89,6 +112,7 @@ function genSystems(){ systems=[]; let rs=(G.systemSeed>>>0)||1, rnd=()=>{ rs=(r
 
 // ---------- draw helpers ----------
 function rgba(c,a){ return 'rgba('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+a+')'; }
+function brightRGB(c,f){ return [Math.min(255,c[0]*f), Math.min(255,c[1]*f), Math.min(255,c[2]*f)]; }   // scale a color's RGB — minor-line brightness
 function colLetter(n){ let s=''; n=n|0; do{ s=String.fromCharCode(65+(n%26))+s; n=Math.floor(n/26)-1; }while(n>=0); return s; }   // 0->A .. 25->Z, 26->AA ...
 function segW(ax,ay,bx,by, col, w){ let a=w2s(ax,ay), b=w2s(bx,by), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
 function circW(r, col, w){ let o=w2s(0,0), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.arc(o.x,o.y, r*cam.zoom, 0, Math.PI*2); dc.stroke(); }
@@ -96,7 +120,19 @@ function label(txt, wx, wy, dx, dy){ let s=w2s(wx,wy); noStroke(); fill(G.labelC
 const LABEL_POS = { center:[0.5,0.5,'c','c',0,0], top:[0.5,0,'c','t',0,3], bottom:[0.5,1,'c','b',0,-3], left:[0,0.5,'l','c',3,0], right:[1,0.5,'r','c',-3,0], tl:[0,0,'l','t',3,3], tr:[1,0,'r','t',-3,3], bl:[0,1,'l','b',3,-3], br:[1,1,'r','b',-3,-3] };   // fx,fy fraction of cell · h-align · v-align · dx,dy pad
 function alignFrom(h,v){ textAlign(h==='l'?LEFT:h==='r'?RIGHT:CENTER, v==='t'?TOP:v==='b'?BOTTOM:CENTER); }
 const POLAR_ZERO = { east:0, north:-90, west:180, south:90 };   // degrees added to the base angle so 0deg points that way
-function clipToBoundary(on){ let dc=drawingContext; if(on){ let o=w2s(0,0); dc.save(); dc.beginPath(); dc.arc(o.x,o.y, G.radius*cam.zoom, 0, Math.PI*2); dc.clip(); } else dc.restore(); }
+function rbEdge(){ return Math.max(1, G.radius + G.boundaryPad); }        // A: drawn boundary + clip extent (edge padded out from radius)
+function rGridExtent(){ return Math.max(1, rbEdge() - G.gridInset); }      // B: grid line + label extent (inset in from the edge)
+function insideB(wx,wy,r){ return G.boundaryShape==='square' ? (Math.abs(wx)<=r && Math.abs(wy)<=r) : (Math.hypot(wx,wy)<=r); }
+function boundaryPath(dc,o,r){ dc.beginPath(); if(G.boundaryShape==='square') dc.rect(o.x-r,o.y-r,r*2,r*2); else dc.arc(o.x,o.y,r,0,Math.PI*2); }
+function clipToBoundary(on){ let dc=drawingContext; if(on){ let o=w2s(0,0); dc.save(); boundaryPath(dc,o, rGridExtent()*cam.zoom); dc.clip(); } else dc.restore(); }
+function applyLineStyle(style){ let dc=drawingContext, s=G.dashScale||1;                // grid-line dash pattern for the given style, screen-space (zoom-independent)
+  switch(style){
+    case 'dashed':  dc.setLineDash([8*s,6*s]); dc.lineCap='butt'; break;
+    case 'dotted':  dc.setLineDash([0.1,4*s]); dc.lineCap='round'; break;               // round cap + ~0 dash = dots
+    case 'dashdot': dc.setLineDash([9*s,5*s,0.1,5*s]); dc.lineCap='round'; break;
+    default:        dc.setLineDash([]); dc.lineCap='butt';
+  }
+}
 
 // ---------- grid renderers ----------
 function drawSquareGrid(){
@@ -104,39 +140,55 @@ function drawSquareGrid(){
   let x0=Math.max(V.x0, G.clip?-G.radius:V.x0), x1=Math.min(V.x1, G.clip?G.radius:V.x1);
   let y0=Math.max(V.y0, G.clip?-G.radius:V.y0), y1=Math.min(V.y1, G.clip?G.radius:V.y1);
   let n=Math.ceil((V.x1-V.x0)/sp)+Math.ceil((V.y1-V.y0)/sp); if(n>4000) return;   // perf guard
-  let base=rgba(G.color, G.opacity), majc=rgba(G.color, Math.min(1,G.opacity*1.9)), axc=rgba(G.color, Math.min(1,G.opacity*2.6));
-  let subc=rgba(G.color, G.opacity*0.4);
-  dc.lineCap='butt';
+  let nc=brightRGB(G.minorColor,G.minorBright);
+  let base=rgba(nc, G.minorOpacity), majc=rgba(G.color, Math.min(1,G.opacity*1.9)), axc=rgba(G.color, Math.min(1,G.opacity*2.6));
+  let subc=rgba(nc, G.minorOpacity*0.5);
   let sub=Math.max(1,Math.round(G.sqSubdiv));
-  if(sub>1 && (sp/sub)*cam.zoom >= 6){ let step=sp/sub;                            // finer subdivision lines, drawn under the base grid, only when legible
+  if(sub>1 && (sp/sub)*cam.zoom >= 6){ let step=sp/sub; applyLineStyle(G.minorStyle);   // finer subdivision lines (minor style), drawn under the base grid, only when legible
     for(let i=Math.ceil(V.x0/step); i*step<=V.x1; i++){ if(((i%sub)+sub)%sub===0) continue; segW(i*step,V.y0,i*step,V.y1, subc, G.weight*0.6); }
     for(let i=Math.ceil(V.y0/step); i*step<=V.y1; i++){ if(((i%sub)+sub)%sub===0) continue; segW(V.x0,i*step,V.x1,i*step, subc, G.weight*0.6); }
   }
   for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp), major=(k%G.sqMajor===0), axis=(k===0);
+    applyLineStyle((major||axis)?G.majorStyle:G.minorStyle);
     segW(wx,V.y0,wx,V.y1, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
   for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp), major=(k%G.sqMajor===0), axis=(k===0);
+    applyLineStyle((major||axis)?G.majorStyle:G.minorStyle);
     segW(V.x0,wy,V.x1,wy, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
   if(G.labels){
-    if(G.sqLabelMode==='world'){ textAlign(CENTER,TOP);
-      for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp); if(k%G.sqMajor===0) label((wx|0)+'', wx, 0, 0, 4); }
-      textAlign(LEFT,CENTER);
-      for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor===0 && k!==0) label((wy|0)+'', 0, wy, 5, 0); }
+    if(G.sqLabelMode==='world'){
+      if(G.edgeLabels){                                                              // screen-edge pinned: X#s ride the bottom, Y#s ride the left map edge, so coords stay on-screen when the axis is panned away (canvas_ideal_game_look coordsAtEdges behaviour)
+        noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize);
+        let yB=height-6, xL=PANELW+4;
+        textAlign(CENTER,BOTTOM);
+        for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ if(Math.round(wx/sp)%G.sqMajor) continue; let sx=w2s(wx,0).x; if(sx>=PANELW && sx<=width) text((wx|0)+'', sx+G.labelOffX, yB+G.labelOffY); }   // X on bottom rail, follows its vertical line
+        textAlign(LEFT,CENTER);
+        for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor||k===0) continue; let sy=w2s(0,wy).y; if(sy>=TOPH && sy<=height) text((wy|0)+'', xL+G.labelOffX, sy+G.labelOffY); }   // Y on left rail (clear of the panel), follows its horizontal line
+      } else { textAlign(CENTER,TOP);
+        for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp); if(k%G.sqMajor===0) label((wx|0)+'', wx, 0, 0, 4); }
+        textAlign(LEFT,CENTER);
+        for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor===0 && k!==0) label((wy|0)+'', 0, wy, 5, 0); }
+      }
     } else if(G.sqLabelMode==='line'){                                            // number the grid lines themselves; major/minor tiers toggle independently, edge-anchored 0..max (invert-aware)
       let kMin=Math.ceil(-G.radius/sp), maxL=Math.floor(G.radius/sp)-kMin, zMinor=sp*cam.zoom>=22;
-      textAlign(CENTER,TOP);
-      for(let k=Math.ceil(V.x0/sp); k*sp<=V.x1; k++){ let idx=k-kMin; if(idx<0||idx>maxL) continue;
-        let major=(k%G.sqMajor===0); if(major? !G.lineNumMajor : (!G.lineNumMinor||!zMinor)) continue;
-        label((G.invertX?maxL-idx:idx)+'', k*sp, 0, 0, 4); }
-      textAlign(LEFT,CENTER);
-      for(let m=Math.ceil(V.y0/sp); m*sp<=V.y1; m++){ let idx=m-kMin; if(idx<0||idx>maxL) continue;
-        let major=(m%G.sqMajor===0); if(major? !G.lineNumMajor : (!G.lineNumMinor||!zMinor)) continue;
-        label((G.invertY?maxL-idx:idx)+'', 0, m*sp, 5, 0); }
+      let tierOn=(k)=> (k%G.sqMajor===0) ? G.lineNumMajor : (G.lineNumMinor&&zMinor);   // which line tiers get numbered
+      if(G.edgeLabels){                                                              // same screen-edge pinning as world mode: line #s ride the bottom / left rail
+        noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); let yB=height-6, xL=PANELW+4;
+        textAlign(CENTER,BOTTOM);
+        for(let k=Math.ceil(V.x0/sp); k*sp<=V.x1; k++){ let idx=k-kMin; if(idx<0||idx>maxL||!tierOn(k)) continue; let sx=w2s(k*sp,0).x; if(sx>=PANELW&&sx<=width) text((G.invertX?maxL-idx:idx)+'', sx+G.labelOffX, yB+G.labelOffY); }
+        textAlign(LEFT,CENTER);
+        for(let m=Math.ceil(V.y0/sp); m*sp<=V.y1; m++){ let idx=m-kMin; if(idx<0||idx>maxL||!tierOn(m)) continue; let sy=w2s(0,m*sp).y; if(sy>=TOPH&&sy<=height) text((G.invertY?maxL-idx:idx)+'', xL+G.labelOffX, sy+G.labelOffY); }
+      } else {
+        textAlign(CENTER,TOP);
+        for(let k=Math.ceil(V.x0/sp); k*sp<=V.x1; k++){ let idx=k-kMin; if(idx<0||idx>maxL||!tierOn(k)) continue; label((G.invertX?maxL-idx:idx)+'', k*sp, 0, 0, 4); }
+        textAlign(LEFT,CENTER);
+        for(let m=Math.ceil(V.y0/sp); m*sp<=V.y1; m++){ let idx=m-kMin; if(idx<0||idx>maxL||!tierOn(m)) continue; label((G.invertY?maxL-idx:idx)+'', 0, m*sp, 5, 0); }
+      }
     } else if(sp*cam.zoom >= 30){                                                // per-cell sector coord (galaxy_01-style fixed lattice), anchored to the galaxy top-left; only when cells are big enough to read
       let kMin=Math.ceil(-G.radius/sp), maxIdx=Math.floor(G.radius/sp-0.5)-kMin;
       let lp=LABEL_POS[G.labelPos]||LABEL_POS.center; alignFrom(lp[2],lp[3]);                                 // cell-label anchor position
       for(let k=Math.floor(V.x0/sp); k*sp<=V.x1; k++){ let cRaw=k-kMin; if(cRaw<0||cRaw>maxIdx) continue;
         for(let m=Math.floor(V.y0/sp); m*sp<=V.y1; m++){ let rRaw=m-kMin; if(rRaw<0||rRaw>maxIdx) continue;
-          let cxw=(k+0.5)*sp, cyw=(m+0.5)*sp; if(Math.hypot(cxw,cyw)>G.radius) continue;                       // visibility judged by cell centre
+          let cxw=(k+0.5)*sp, cyw=(m+0.5)*sp; if(!insideB(cxw,cyw, rGridExtent())) continue;                    // visibility: cell centre inside the (shape-aware) grid extent
           let col=G.invertX?maxIdx-cRaw:cRaw, row=G.invertY?maxIdx-rRaw:rRaw;                                 // per-axis invert
           label(G.sqLabelMode==='index' ? ('('+col+','+row+')') : (colLetter(col)+(row+1)), (k+lp[0])*sp, (m+lp[1])*sp, lp[4], lp[5]); } }
     }
@@ -144,16 +196,17 @@ function drawSquareGrid(){
 }
 function drawPolarGrid(){
   let V=visibleWorld(), rs=G.ringSpacing;
-  let maxR = G.clip? G.radius : Math.max(Math.hypot(V.x0,V.y0),Math.hypot(V.x1,V.y0),Math.hypot(V.x0,V.y1),Math.hypot(V.x1,V.y1));
-  let base=rgba(G.color,G.opacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9));
-  if(maxR/rs < 400) for(let r=rs; r<=maxR; r+=rs){ let major=(Math.round(r/rs)%5===0); circW(r, major?majc:base, major?G.weight*1.6:G.weight); }
+  let maxR = G.clip? rGridExtent() : Math.max(Math.hypot(V.x0,V.y0),Math.hypot(V.x1,V.y0),Math.hypot(V.x0,V.y1),Math.hypot(V.x1,V.y1));
+  let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9));   // base rings + spokes use the minor color; major rings use the major color
+  if(maxR/rs < 400) for(let r=rs; r<=maxR; r+=rs){ let major=(Math.round(r/rs)%5===0); applyLineStyle(major?G.majorStyle:G.minorStyle); circW(r, major?majc:base, major?G.weight*1.6:G.weight); }
   let sc=G.spokeCount|0, a0=((POLAR_ZERO[G.polarZero]||0)+G.angleOffset)*Math.PI/180;   // 0deg direction + fine offset
+  applyLineStyle(G.minorStyle);                                                          // spokes = minor style
   for(let i=0;i<sc;i++){ let a=a0+i/sc*Math.PI*2; segW(0,0, Math.cos(a)*maxR, Math.sin(a)*maxR, base, G.weight); }
   if(G.labels){
     textAlign(LEFT,BOTTOM);
-    if(maxR/rs < 100) for(let r=rs; r<=(G.clip?G.radius:maxR); r+=rs){ if(Math.round(r/rs)%5===0) label((r|0)+'', 0, -r, 4, -2); }   // ring radii up the top spoke
+    if(maxR/rs < 100) for(let r=rs; r<=(G.clip?rGridExtent():maxR); r+=rs){ if(Math.round(r/rs)%5===0) label((r|0)+'', 0, -r, 4, -2); }   // ring radii up the top spoke
     textAlign(CENTER,CENTER); let midF=(G.polarLabelAt==='mid')?0.5:0;                                        // label the spoke (0) or the wedge midpoint (0.5)
-    for(let i=0;i<sc;i++){ let a=a0+(i+midF)/sc*Math.PI*2, lr=(G.clip?G.radius:Math.min(maxR, G.radius))*1.03;
+    for(let i=0;i<sc;i++){ let a=a0+(i+midF)/sc*Math.PI*2, lr=rGridExtent()*1.03 + G.labelRingPad;              // ring tracks the grid extent; labelRingPad (C) nudges in/out
       let txt;
       if(G.radialMode==='letters') txt=String.fromCharCode(65+(i%26));
       else if(G.radialMode==='magnetic'){ let b=(Math.round(a0*180/Math.PI+(i+midF)/sc*360+90)%360+360)%360; txt=('00'+b).slice(-3); }   // compass bearing, CW from North, 3-digit
@@ -165,7 +218,9 @@ function drawHexGrid(){
   let V=visibleWorld(), s=G.hexSize, dc=drawingContext, col=rgba(G.color,G.opacity);
   let w = G.hexFlat? s*1.5 : Math.sqrt(3)*s, h = G.hexFlat? Math.sqrt(3)*s : s*1.5;   // column / row pitch
   let cols=(V.x1-V.x0)/w, rows=(V.y1-V.y0)/h; if(cols*rows>2500) return;               // perf guard
-  dc.strokeStyle=col; dc.lineWidth=G.weight;
+  dc.strokeStyle=col; dc.lineWidth=G.weight; applyLineStyle(G.majorStyle);   // hex is single-tier — uses the major style
+  let showLab = G.labels && s*cam.zoom>=16, R=rGridExtent();                            // axial (q,r) labels once hexes are big enough to read
+  if(showLab) textAlign(CENTER,CENTER);
   for(let r=Math.floor(V.y0/h)-1; r<=V.y1/h+1; r++){
     for(let c=Math.floor(V.x0/w)-1; c<=V.x1/w+1; c++){
       let ox = G.hexFlat? c*w : c*w + (r&1?w/2:0);
@@ -173,28 +228,59 @@ function drawHexGrid(){
       dc.beginPath();
       for(let k=0;k<6;k++){ let ang=(Math.PI/180)*(60*k + (G.hexFlat?0:30)), p=w2s(ox+Math.cos(ang)*s, oy+Math.sin(ang)*s); if(k===0)dc.moveTo(p.x,p.y); else dc.lineTo(p.x,p.y); }
       dc.closePath(); dc.stroke();
+      if(showLab && insideB(ox,oy,R)){                                                  // offset (c,r) -> axial (q,r), center-origin: the core hex at world (0,0) is 0,0
+        let q = G.hexFlat? c : c-Math.floor(r/2), ar = G.hexFlat? r-Math.floor(c/2) : r;
+        label(q+','+ar, ox, oy, 0, 0);
+      }
     }
   }
 }
 
+function drawIsoGrid(){                                                        // square lattice on the ground plane, projected iso; bounded to the galaxy (grid inset), clipped to the boundary shape
+  let R=rGridExtent(), sp=G.sqSpacing; if(R/sp>500) return;                    // perf guard
+  let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9)), axc=rgba(G.color,Math.min(1,G.opacity*2.6));   // base lines use the minor color; major/axis use the major color
+  let kmax=Math.floor(R/sp), ext=(v)=> G.boundaryShape==='square' ? R : Math.sqrt(Math.max(0,R*R-v*v));   // chord half-length so a circular galaxy reads as an ellipse floor
+  for(let k=-kmax;k<=kmax;k++){ let w=k*sp, major=(k%G.sqMajor===0), axis=(k===0);
+    applyLineStyle((major||axis)?G.majorStyle:G.minorStyle);
+    let col=axis?axc:(major?majc:base), lw=(axis?G.weight*2:(major?G.weight*1.6:G.weight)), e=ext(w);
+    segIso(w,-e,w,e,col,lw); segIso(-e,w,e,w,col,lw); }
+  if(G.labels && sp*cam.zoom>=20) drawIsoLabels(R,sp,kmax);
+}
+function segIso(ax,ay,bx,by,col,w){ let a=iso2s(ax,ay,0), b=iso2s(bx,by,0), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
+function isoLabel(txt,wx,wy){ let s=iso2s(wx,wy,0); noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); text(txt, s.x+G.labelOffX, s.y+G.labelOffY); }
+function drawIsoLabels(R,sp,kmax){ textAlign(CENTER,CENTER);
+  if(G.sqLabelMode==='world'){ for(let k=-kmax;k<=kmax;k++){ if(k%G.sqMajor) continue; isoLabel((k*sp|0)+'',k*sp,0); if(k!==0) isoLabel((k*sp|0)+'',0,k*sp); } return; }
+  if(sp*cam.zoom<34) return;                                                   // cell coords need room to read
+  let kMin=Math.ceil(-R/sp), maxIdx=Math.floor(R/sp-0.5)-kMin;                  // edge-anchored, same convention as the square grid
+  for(let k=Math.floor(-R/sp);(k+0.5)*sp<=R;k++){ let cRaw=k-kMin; if(cRaw<0||cRaw>maxIdx) continue;
+    for(let m=Math.floor(-R/sp);(m+0.5)*sp<=R;m++){ let rRaw=m-kMin; if(rRaw<0||rRaw>maxIdx) continue;
+      let cxw=(k+0.5)*sp, cyw=(m+0.5)*sp; if(!insideB(cxw,cyw,R)) continue;
+      let col=G.invertX?maxIdx-cRaw:cRaw, row=G.invertY?maxIdx-rRaw:rRaw;
+      isoLabel(G.sqLabelMode==='index'?('('+col+','+row+')'):(G.sqLabelMode==='line'?(''+col):(colLetter(col)+(row+1))), cxw, cyw); } }
+}
+
 // ---------- main ----------
-function setup(){ pixelDensity(1); createCanvas(windowWidth,windowHeight); genSystems(); recenter(); buildPanel(); }
+function setup(){ pixelDensity(1); createCanvas(windowWidth,windowHeight); genSystems(); buildPanel(); }   // opens at cam.zoom=0.20; use Recenter to auto-fit
 function windowResized(){ resizeCanvas(windowWidth,windowHeight); }
 function draw(){
   background(G.bg[0],G.bg[1],G.bg[2]);
   // context systems (under the grid)
   if(G.showSystems){ let dc=drawingContext; noStroke();
-    for(const s of systems){ let p=w2s(s.x,s.y), r=1.4+s.t*2; let c=[160+80*s.t,150+60*(1-s.t),120+90*s.t];
+    for(const s of systems){ let p=proj(s.x,s.y), r=1.4+s.t*2; let c=[160+80*s.t,150+60*(1-s.t),120+90*s.t];
       dc.fillStyle=rgba(c,0.9); dc.beginPath(); dc.arc(p.x,p.y,r,0,Math.PI*2); dc.fill(); } }
   // grid
-  clipToBoundary(G.clip);
+  clipToBoundary(G.type!=='iso' && G.clip);   // screen-space clip can't follow the iso plane; iso bounds itself to the radius instead
   if(G.type==='square') drawSquareGrid();
   else if(G.type==='hex') drawHexGrid();
+  else if(G.type==='iso') drawIsoGrid();
   else drawPolarGrid();
   clipToBoundary(false);
+  { let dc=drawingContext; dc.setLineDash([]); dc.lineCap='butt'; }   // reset so grid line-style doesn't bleed into boundary/origin
   // boundary + origin
-  if(G.showBoundary) circW(G.radius, rgba(G.boundaryColor,G.boundaryOpacity), Math.max(1.5,G.weight*1.5));
-  if(G.showOrigin){ let o=w2s(0,0), dc=drawingContext, oc=rgba(G.boundaryColor,Math.min(1,G.boundaryOpacity+0.1));
+  if(G.showBoundary){ let dc=drawingContext, col=rgba(G.boundaryColor,G.boundaryOpacity), lw=Math.max(1.5,G.weight*1.5);
+    if(G.type==='iso'){ drawProjBoundary(rbEdge(), col, lw); }
+    else { let o=w2s(0,0); dc.strokeStyle=col; dc.lineWidth=lw; boundaryPath(dc,o, rbEdge()*cam.zoom); dc.stroke(); } }
+  if(G.showOrigin){ let o=proj(0,0), dc=drawingContext, oc=rgba(G.boundaryColor,Math.min(1,G.boundaryOpacity+0.1));
     dc.strokeStyle=oc; dc.lineWidth=1.5; dc.beginPath(); dc.moveTo(o.x-7,o.y); dc.lineTo(o.x+7,o.y); dc.moveTo(o.x,o.y-7); dc.lineTo(o.x,o.y+7); dc.stroke();
     dc.fillStyle=oc; dc.beginPath(); dc.arc(o.x,o.y,2.5,0,Math.PI*2); dc.fill(); }
   document.getElementById('stat').textContent = Math.round(frameRate())+' fps · zoom '+cam.zoom.toFixed(2)+' · '+BUILD_ID;
@@ -222,13 +308,15 @@ function buildPanel(){
         row.appendChild(inp); row.appendChild(val); ctrls[key]={inp,val};
       } else if(type==='color'){ let inp=document.createElement('input'); inp.type='color'; inp.value=rgbToHex(G[key]); inp.oninput=()=>{ G[key]=hexToRgb(inp.value); }; row.appendChild(inp); ctrls[key]={inp};
       } else if(type==='bool'){ let inp=document.createElement('input'); inp.type='checkbox'; inp.checked=!!G[key]; inp.oninput=()=>{ G[key]=inp.checked; }; row.appendChild(inp); ctrls[key]={inp};
-      } else if(type==='select'){ let inp=document.createElement('select'); for(const [v,l] of it[3]){ let o=document.createElement('option'); o.value=v; o.textContent=l; inp.appendChild(o); } inp.value=G[key]; inp.onchange=()=>{ G[key]=inp.value; }; row.appendChild(inp); ctrls[key]={inp}; }
+      } else if(type==='select'){ let inp=document.createElement('select'); for(const [v,l] of it[3]){ let o=document.createElement('option'); o.value=v; o.textContent=l; inp.appendChild(o); } inp.value=G[key]; inp.onchange=()=>{ G[key]=inp.value; if(key==='type') recenter(); }; row.appendChild(inp); ctrls[key]={inp}; }
       panel.appendChild(row);
     }
   }
   let hint=document.createElement('div'); hint.className='hint'; hint.textContent='World-space map grid — drag to pan, wheel to zoom (it stays anchored to the galaxy origin + radius, like the fade Map track will). Boundary circle = the galaxy edge (Radius). Presets up top. Recenter frames the boundary.'; panel.appendChild(hint);
 }
-function applyPreset(name){ let p=PRESETS[name]; if(!p) return; curPreset=name; Object.assign(G, JSON.parse(JSON.stringify(p.ov))); genSystems(); buildPanel(); }
+function applyPreset(name){ let p=PRESETS[name]; if(!p) return; curPreset=name; let ov=JSON.parse(JSON.stringify(p.ov)); Object.assign(G, ov);
+  if(!('minorColor' in ov)) G.minorColor=G.color.slice();   // presets that don't set a minor color inherit the major color, so the minor lattice stays hue-coherent
+  genSystems(); buildPanel(); }
 function reseed(){ G.systemSeed=Math.floor(Math.random()*9999)+1; genSystems(); if(ctrls.systemSeed){ ctrls.systemSeed.inp.value=G.systemSeed; ctrls.systemSeed.val.textContent=G.systemSeed; } }
 window.addEventListener('load',()=>{ document.getElementById('build-pill').textContent=BUILD_ID; document.getElementById('reseed-btn').onclick=reseed; document.getElementById('recenter-btn').onclick=recenter; });
 </script>
