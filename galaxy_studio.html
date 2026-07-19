@@ -65,7 +65,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260719';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '03';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '04';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -166,7 +166,7 @@ let CFG = {
     labels:true, labelColor:[150,200,235], labelSize:11, radialMode:'letters',
     labelPos:'center', labelOffX:0, labelOffY:0,
     polarZero:'east', polarLabelAt:'line',
-    bakeOn:false, bakeMode:'cache', bakeLabels:true,   // grid bake: cache (A, idle savings, crisp) | map (B, pans/zooms as an image, scales with zoom); bakeLabels off = labels stay live/crisp on top
+    bakeOn:false, bakeMode:'cache', bakeLabels:true,   // grid bake: cache (A, re-bakes on any camera move) | map (B, pan-free — re-blits on pan, re-bakes crisp on zoom); bakeLabels off = labels stay live/crisp on top
     coMouse:true, coWaypoint:false, coSystem:false, coPixel:false, coPct:false, coWorld:true,   // coordinate readout: targets + fields
     coDatum:'grid', coYup:false, coRelative:false, coRelFrom:'wp'                                // world datum (grid|gen) · Y-up flip · relative range/bearing from a reference marker
   },
@@ -778,8 +778,9 @@ const GRID = (function(){
     if(force || !G.bakeOn || width<2 || height<2){ renderGrid(window,'both'); return; }   // isolated preview, bake off, or canvas not sized yet -> fully live
     let mode=(G.type==='iso')?'cache':G.bakeMode;                              // iso can't map-bake cleanly (sheared plane) -> screen cache
     let inBuf=G.bakeLabels?'both':'lines';                                     // labels split out of the bake stay live + crisp on top
-    if(mode==='map'){                                                          // B: bake into a map-space image that pans/zooms via a transform; re-bakes only on config change
-      let E=rbEdge()*1.05, RES=1024, sig='map|'+E.toFixed(1)+'|'+inBuf+'|'+cfgSig();
+    if(mode==='map'){                                                          // B: bake the galaxy extent into a map image — panning just re-blits it (rigid translate), zoom re-bakes at the new scale so it stays crisp
+      let E=rbEdge()*1.05, RES=Math.round(Math.min(2048, Math.max(256, 2*E*_z)));   // buffer res tracks the on-screen size -> lines/labels baked at ~screen scale (capped); depends on zoom, NOT pan
+      let sig='map|'+E.toFixed(1)+'|'+RES+'|'+inBuf+'|'+cfgSig();               // sig excludes pan (cx,cy) -> panning re-blits without a re-bake; RES (zoom) in the sig -> zoom re-bakes crisp
       if(sig!==_bufSig){ ensureBuf(RES,RES);
         let s=[_px,_py,_z,_cx,_cy,_bx0,_by0,_bx1,_by1];
         _px=RES/2; _py=RES/2; _z=RES/(2*E); _cx=0; _cy=0; _bx0=0;_by0=0;_bx1=RES;_by1=RES;   // world -> buffer projection + bounds
@@ -1484,7 +1485,7 @@ const GRID_SCHEMA = [
   ['Labels', [['labels','Labels','bool'],['radialMode','Radial labels','select',[['letters','Letters (A,B,C)'],['degrees','Degrees'],['magnetic','Magnetic radials']]],['labelColor','Color','color'],['labelSize','Size','range',8,20,1]]],
   ['Label placement', [['labelPos','Cell anchor','select',[['center','Center'],['top','Top'],['bottom','Bottom'],['left','Left'],['right','Right'],['tl','Top-left'],['tr','Top-right'],['bl','Bottom-left'],['br','Bottom-right']]],['labelOffX','Offset X','range',-30,30,1],['labelOffY','Offset Y','range',-30,30,1],['polarZero','Polar 0° at','select',[['east','East →'],['north','North ↑'],['west','West ←'],['south','South ↓']]],['polarLabelAt','Polar labels','select',[['line','On spoke line'],['mid','Wedge midpoint']]]]],
   ['Coordinates readout', [['coMouse','Mouse','bool'],['coWaypoint','Waypoint','bool'],['coSystem','System','bool'],['coPixel','Show pixels','bool'],['coPct','Show %','bool'],['coWorld','Show world','bool'],['coDatum','World datum','select',[['grid','Grid frame'],['gen','Generation (x,y)']]],['coYup','Y-up world','bool'],['coRelative','Relative','bool'],['coRelFrom','Measure from','select',[['wp','Waypoint'],['sys','System'],['mouse','Mouse']]]]],
-  ['Bake (performance)', [['bakeOn','Bake grid','bool'],['bakeMode','Mode','select',[['cache','A · cache (crisp, idle)'],['map','B · map (scales, pan/zoom)']]],['bakeLabels','Bake labels too','bool']]]
+  ['Bake (performance)', [['bakeOn','Bake grid','bool'],['bakeMode','Mode','select',[['cache','A · cache (idle)'],['map','B · map (pan-free, crisp)']]],['bakeLabels','Bake labels too','bool']]]
 ];
 const GRID_PRESETS = {
   blueprint:{name:'Blueprint (square)', ov:{type:'square',color:[70,140,210],opacity:0.45,weight:1,sqSpacing:150,sqMajor:5,labels:true,showBoundary:true,boundaryColor:[120,200,255]}},
