@@ -65,7 +65,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260719';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '02';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '03';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -166,6 +166,7 @@ let CFG = {
     labels:true, labelColor:[150,200,235], labelSize:11, radialMode:'letters',
     labelPos:'center', labelOffX:0, labelOffY:0,
     polarZero:'east', polarLabelAt:'line',
+    bakeOn:false, bakeMode:'cache', bakeLabels:true,   // grid bake: cache (A, idle savings, crisp) | map (B, pans/zooms as an image, scales with zoom); bakeLabels off = labels stay live/crisp on top
     coMouse:true, coWaypoint:false, coSystem:false, coPixel:false, coPct:false, coWorld:true,   // coordinate readout: targets + fields
     coDatum:'grid', coYup:false, coRelative:false, coRelFrom:'wp'                                // world datum (grid|gen) · Y-up flip · relative range/bearing from a reference marker
   },
@@ -631,60 +632,64 @@ const GRID_OPT_STYLE=[['solid','Solid'],['dashed','Dashed'],['dotted','Dotted'],
 const GRID = (function(){
   let G, _cx=0,_cy=0,_z=1,_px=0,_py=0;                                          // cam + projection state, set per draw()
   let coWp=null, coSelSys=null, coSelSysId=-1;                                  // readout state: waypoint + hovered system
+  let _P=window, _pass='both';                                                 // draw target (window | bake buffer) + which elements to draw (lines|labels|both)
+  let _buf=null, _bufSig='', _bx0=0,_by0=0,_bx1=0,_by1=0;                        // bake buffer + signature + target pixel bounds (screen play area, or the buffer)
   const ISO_COS=Math.cos(Math.PI/6), ISO_SIN=Math.sin(Math.PI/6);
   const LABEL_POS={ center:[0.5,0.5,'c','c',0,0], top:[0.5,0,'c','t',0,3], bottom:[0.5,1,'c','b',0,-3], left:[0,0.5,'l','c',3,0], right:[1,0.5,'r','c',-3,0], tl:[0,0,'l','t',3,3], tr:[1,0,'r','t',-3,3], bl:[0,1,'l','b',3,-3], br:[1,1,'r','b',-3,-3] };
   const POLAR_ZERO={ east:0, north:-90, west:180, south:90 };
-  function setCam(camX,camY,camZoom){ _cx=(camX!==undefined)?camX:cam.x; _cy=(camY!==undefined)?camY:cam.y; _z=(camZoom!==undefined)?camZoom:cam.zoom; _px=(PANELW+width)/2; _py=height/2; }
+  function setCam(camX,camY,camZoom){ _cx=(camX!==undefined)?camX:cam.x; _cy=(camY!==undefined)?camY:cam.y; _z=(camZoom!==undefined)?camZoom:cam.zoom; _px=(PANELW+width)/2; _py=height/2; _bx0=PANELW;_by0=0;_bx1=width;_by1=height; }
   function S(wx,wy){ return { x:_px+(_cx+wx)*_z, y:_py+(_cy+wy)*_z }; }            // world -> screen (same projection as the galaxy view)
-  function VIS(){ return { x0:(PANELW-_px)/_z-_cx, x1:(width-_px)/_z-_cx, y0:(0-_py)/_z-_cy, y1:(height-_py)/_z-_cy }; }
+  function VIS(){ return { x0:(_bx0-_px)/_z-_cx, x1:(_bx1-_px)/_z-_cx, y0:(_by0-_py)/_z-_cy, y1:(_by1-_py)/_z-_cy }; }   // visible world rect within the target's pixel bounds
   function RAD(){ return CFG.gen.radius; }                                       // grid coordinate radius = the galaxy radius
   function iso2s(wx,wy,wz){ let a=G.isoRot*Math.PI/180, rx=wx*Math.cos(a)-wy*Math.sin(a), ry=wx*Math.sin(a)+wy*Math.cos(a);
     let ix=(rx-ry)*ISO_COS, iy=(rx+ry)*ISO_SIN*G.isoPitch-(wz||0);
     return { x:_px+(_cx+ix)*_z, y:_py+(_cy+iy)*_z }; }
   function proj(wx,wy){ return G.type==='iso' ? iso2s(wx,wy,0) : S(wx,wy); }
-  function drawProjBoundary(r,colStr,lw){ let dc=drawingContext; dc.strokeStyle=colStr; dc.lineWidth=lw; dc.beginPath();
+  function drawProjBoundary(r,colStr,lw){ let dc=_P.drawingContext; dc.strokeStyle=colStr; dc.lineWidth=lw; dc.beginPath();
     if(G.boundaryShape==='square'){ let p=[[-r,-r],[r,-r],[r,r],[-r,r]]; for(let i=0;i<4;i++){ let s=iso2s(p[i][0],p[i][1],0); i?dc.lineTo(s.x,s.y):dc.moveTo(s.x,s.y); } dc.closePath(); }
     else { for(let i=0;i<=64;i++){ let ang=i/64*Math.PI*2, s=iso2s(Math.cos(ang)*r,Math.sin(ang)*r,0); i?dc.lineTo(s.x,s.y):dc.moveTo(s.x,s.y); } }
     dc.stroke(); }
   function brightRGB(c,f){ return [Math.min(255,c[0]*f), Math.min(255,c[1]*f), Math.min(255,c[2]*f)]; }
   function colLetter(n){ let s=''; n=n|0; do{ s=String.fromCharCode(65+(n%26))+s; n=Math.floor(n/26)-1; }while(n>=0); return s; }
-  function seg(ax,ay,bx,by,col,w){ let a=S(ax,ay), b=S(bx,by), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
-  function circ(r,col,w){ let o=S(0,0), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.arc(o.x,o.y, r*_z, 0, Math.PI*2); dc.stroke(); }
-  function lbl(txt,wx,wy,dx,dy){ let s=S(wx,wy); noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); text(txt, s.x+dx+G.labelOffX, s.y+dy+G.labelOffY); }
-  function alignFrom(h,v){ textAlign(h==='l'?LEFT:h==='r'?RIGHT:CENTER, v==='t'?TOP:v==='b'?BOTTOM:CENTER); }
+  function seg(ax,ay,bx,by,col,w){ let a=S(ax,ay), b=S(bx,by), dc=_P.drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
+  function circ(r,col,w){ let o=S(0,0), dc=_P.drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.arc(o.x,o.y, r*_z, 0, Math.PI*2); dc.stroke(); }
+  function lbl(txt,wx,wy,dx,dy){ let s=S(wx,wy); _P.noStroke(); _P.fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); _P.textSize(G.labelSize); _P.text(txt, s.x+dx+G.labelOffX, s.y+dy+G.labelOffY); }
+  function alignFrom(h,v){ _P.textAlign(h==='l'?LEFT:h==='r'?RIGHT:CENTER, v==='t'?TOP:v==='b'?BOTTOM:CENTER); }
   function rbEdge(){ return Math.max(1, RAD() + G.boundaryPad); }
   function rGridExtent(){ return Math.max(1, rbEdge() - G.gridInset); }
   function insideB(wx,wy,r){ return G.boundaryShape==='square' ? (Math.abs(wx)<=r && Math.abs(wy)<=r) : (Math.hypot(wx,wy)<=r); }
   function boundaryPath(dc,o,r){ dc.beginPath(); if(G.boundaryShape==='square') dc.rect(o.x-r,o.y-r,r*2,r*2); else dc.arc(o.x,o.y,r,0,Math.PI*2); }
-  function applyLineStyle(style){ let dc=drawingContext, s=G.dashScale||1;
+  function applyLineStyle(style){ let dc=_P.drawingContext, s=G.dashScale||1;
     switch(style){ case 'dashed': dc.setLineDash([8*s,6*s]); dc.lineCap='butt'; break; case 'dotted': dc.setLineDash([0.1,4*s]); dc.lineCap='round'; break; case 'dashdot': dc.setLineDash([9*s,5*s,0.1,5*s]); dc.lineCap='round'; break; default: dc.setLineDash([]); dc.lineCap='butt'; } }
   function drawSquare(){
     let V=VIS(), sp=G.sqSpacing;
     let n=Math.ceil((V.x1-V.x0)/sp)+Math.ceil((V.y1-V.y0)/sp); if(n>4000) return;
     let nc=brightRGB(G.minorColor,G.minorBright);
     let base=rgba(nc,G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9)), axc=rgba(G.color,Math.min(1,G.opacity*2.6)), subc=rgba(nc,G.minorOpacity*0.5);
-    let sub=Math.max(1,Math.round(G.sqSubdiv));
-    if(sub>1 && (sp/sub)*_z>=6){ let step=sp/sub; applyLineStyle(G.minorStyle);
-      for(let i=Math.ceil(V.x0/step); i*step<=V.x1; i++){ if(((i%sub)+sub)%sub===0) continue; seg(i*step,V.y0,i*step,V.y1,subc,G.weight*0.6); }
-      for(let i=Math.ceil(V.y0/step); i*step<=V.y1; i++){ if(((i%sub)+sub)%sub===0) continue; seg(V.x0,i*step,V.x1,i*step,subc,G.weight*0.6); } }
-    for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp), major=(k%G.sqMajor===0), axis=(k===0);
-      applyLineStyle((major||axis)?G.majorStyle:G.minorStyle); seg(wx,V.y0,wx,V.y1, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
-    for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp), major=(k%G.sqMajor===0), axis=(k===0);
-      applyLineStyle((major||axis)?G.majorStyle:G.minorStyle); seg(V.x0,wy,V.x1,wy, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
-    if(!G.labels) return;
+    if(_pass!=='labels'){
+      let sub=Math.max(1,Math.round(G.sqSubdiv));
+      if(sub>1 && (sp/sub)*_z>=6){ let step=sp/sub; applyLineStyle(G.minorStyle);
+        for(let i=Math.ceil(V.x0/step); i*step<=V.x1; i++){ if(((i%sub)+sub)%sub===0) continue; seg(i*step,V.y0,i*step,V.y1,subc,G.weight*0.6); }
+        for(let i=Math.ceil(V.y0/step); i*step<=V.y1; i++){ if(((i%sub)+sub)%sub===0) continue; seg(V.x0,i*step,V.x1,i*step,subc,G.weight*0.6); } }
+      for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp), major=(k%G.sqMajor===0), axis=(k===0);
+        applyLineStyle((major||axis)?G.majorStyle:G.minorStyle); seg(wx,V.y0,wx,V.y1, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
+      for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp), major=(k%G.sqMajor===0), axis=(k===0);
+        applyLineStyle((major||axis)?G.majorStyle:G.minorStyle); seg(V.x0,wy,V.x1,wy, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
+    }
+    if(_pass==='lines' || !G.labels) return;
     if(G.sqLabelMode==='world'){
-      if(G.edgeLabels){ noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); let yB=height-6, xL=PANELW+4;
-        textAlign(CENTER,BOTTOM); for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ if(Math.round(wx/sp)%G.sqMajor) continue; let sx=S(wx,0).x; if(sx>=PANELW&&sx<=width) text((wx|0)+'', sx+G.labelOffX, yB+G.labelOffY); }
-        textAlign(LEFT,CENTER); for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor||k===0) continue; let sy=S(0,wy).y; if(sy>=31&&sy<=height) text((wy|0)+'', xL+G.labelOffX, sy+G.labelOffY); }
-      } else { textAlign(CENTER,TOP); for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp); if(k%G.sqMajor===0) lbl((wx|0)+'', wx,0,0,4); }
-        textAlign(LEFT,CENTER); for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor===0&&k!==0) lbl((wy|0)+'', 0,wy,5,0); } }
+      if(G.edgeLabels){ _P.noStroke(); _P.fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); _P.textSize(G.labelSize); let yB=height-6, xL=PANELW+4;
+        _P.textAlign(CENTER,BOTTOM); for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ if(Math.round(wx/sp)%G.sqMajor) continue; let sx=S(wx,0).x; if(sx>=PANELW&&sx<=width) _P.text((wx|0)+'', sx+G.labelOffX, yB+G.labelOffY); }
+        _P.textAlign(LEFT,CENTER); for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor||k===0) continue; let sy=S(0,wy).y; if(sy>=31&&sy<=height) _P.text((wy|0)+'', xL+G.labelOffX, sy+G.labelOffY); }
+      } else { _P.textAlign(CENTER,TOP); for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp); if(k%G.sqMajor===0) lbl((wx|0)+'', wx,0,0,4); }
+        _P.textAlign(LEFT,CENTER); for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor===0&&k!==0) lbl((wy|0)+'', 0,wy,5,0); } }
     } else if(G.sqLabelMode==='line'){
       let kMin=Math.ceil(-RAD()/sp), maxL=Math.floor(RAD()/sp)-kMin, zMinor=sp*_z>=22, tierOn=(k)=>(k%G.sqMajor===0)?G.lineNumMajor:(G.lineNumMinor&&zMinor);
-      if(G.edgeLabels){ noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); let yB=height-6, xL=PANELW+4;
-        textAlign(CENTER,BOTTOM); for(let k=Math.ceil(V.x0/sp); k*sp<=V.x1; k++){ let idx=k-kMin; if(idx<0||idx>maxL||!tierOn(k)) continue; let sx=S(k*sp,0).x; if(sx>=PANELW&&sx<=width) text((G.invertX?maxL-idx:idx)+'', sx+G.labelOffX, yB+G.labelOffY); }
-        textAlign(LEFT,CENTER); for(let m=Math.ceil(V.y0/sp); m*sp<=V.y1; m++){ let idx=m-kMin; if(idx<0||idx>maxL||!tierOn(m)) continue; let sy=S(0,m*sp).y; if(sy>=31&&sy<=height) text((G.invertY?maxL-idx:idx)+'', xL+G.labelOffX, sy+G.labelOffY); }
-      } else { textAlign(CENTER,TOP); for(let k=Math.ceil(V.x0/sp); k*sp<=V.x1; k++){ let idx=k-kMin; if(idx<0||idx>maxL||!tierOn(k)) continue; lbl((G.invertX?maxL-idx:idx)+'', k*sp,0,0,4); }
-        textAlign(LEFT,CENTER); for(let m=Math.ceil(V.y0/sp); m*sp<=V.y1; m++){ let idx=m-kMin; if(idx<0||idx>maxL||!tierOn(m)) continue; lbl((G.invertY?maxL-idx:idx)+'', 0,m*sp,5,0); } }
+      if(G.edgeLabels){ _P.noStroke(); _P.fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); _P.textSize(G.labelSize); let yB=height-6, xL=PANELW+4;
+        _P.textAlign(CENTER,BOTTOM); for(let k=Math.ceil(V.x0/sp); k*sp<=V.x1; k++){ let idx=k-kMin; if(idx<0||idx>maxL||!tierOn(k)) continue; let sx=S(k*sp,0).x; if(sx>=PANELW&&sx<=width) _P.text((G.invertX?maxL-idx:idx)+'', sx+G.labelOffX, yB+G.labelOffY); }
+        _P.textAlign(LEFT,CENTER); for(let m=Math.ceil(V.y0/sp); m*sp<=V.y1; m++){ let idx=m-kMin; if(idx<0||idx>maxL||!tierOn(m)) continue; let sy=S(0,m*sp).y; if(sy>=31&&sy<=height) _P.text((G.invertY?maxL-idx:idx)+'', xL+G.labelOffX, sy+G.labelOffY); }
+      } else { _P.textAlign(CENTER,TOP); for(let k=Math.ceil(V.x0/sp); k*sp<=V.x1; k++){ let idx=k-kMin; if(idx<0||idx>maxL||!tierOn(k)) continue; lbl((G.invertX?maxL-idx:idx)+'', k*sp,0,0,4); }
+        _P.textAlign(LEFT,CENTER); for(let m=Math.ceil(V.y0/sp); m*sp<=V.y1; m++){ let idx=m-kMin; if(idx<0||idx>maxL||!tierOn(m)) continue; lbl((G.invertY?maxL-idx:idx)+'', 0,m*sp,5,0); } }
     } else if(sp*_z>=30){
       let kMin=Math.ceil(-RAD()/sp), maxIdx=Math.floor(RAD()/sp-0.5)-kMin, lp=LABEL_POS[G.labelPos]||LABEL_POS.center; alignFrom(lp[2],lp[3]);
       for(let k=Math.floor(V.x0/sp); k*sp<=V.x1; k++){ let cRaw=k-kMin; if(cRaw<0||cRaw>maxIdx) continue;
@@ -698,12 +703,15 @@ const GRID = (function(){
     let V=VIS(), rs=G.ringSpacing;
     let maxR=G.clip?rGridExtent():Math.max(Math.hypot(V.x0,V.y0),Math.hypot(V.x1,V.y0),Math.hypot(V.x0,V.y1),Math.hypot(V.x1,V.y1));
     let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9));
-    if(maxR/rs<400) for(let r=rs; r<=maxR; r+=rs){ let major=(Math.round(r/rs)%5===0); applyLineStyle(major?G.majorStyle:G.minorStyle); circ(r, major?majc:base, major?G.weight*1.6:G.weight); }
-    let sc=G.spokeCount|0, a0=((POLAR_ZERO[G.polarZero]||0)+G.angleOffset)*Math.PI/180; applyLineStyle(G.minorStyle);
-    for(let i=0;i<sc;i++){ let a=a0+i/sc*Math.PI*2; seg(0,0, Math.cos(a)*maxR, Math.sin(a)*maxR, base, G.weight); }
-    if(!G.labels) return;
-    textAlign(LEFT,BOTTOM); if(maxR/rs<100) for(let r=rs; r<=(G.clip?rGridExtent():maxR); r+=rs){ if(Math.round(r/rs)%5===0) lbl((r|0)+'', 0,-r,4,-2); }
-    textAlign(CENTER,CENTER); let midF=(G.polarLabelAt==='mid')?0.5:0;
+    let sc=G.spokeCount|0, a0=((POLAR_ZERO[G.polarZero]||0)+G.angleOffset)*Math.PI/180;
+    if(_pass!=='labels'){
+      if(maxR/rs<400) for(let r=rs; r<=maxR; r+=rs){ let major=(Math.round(r/rs)%5===0); applyLineStyle(major?G.majorStyle:G.minorStyle); circ(r, major?majc:base, major?G.weight*1.6:G.weight); }
+      applyLineStyle(G.minorStyle);
+      for(let i=0;i<sc;i++){ let a=a0+i/sc*Math.PI*2; seg(0,0, Math.cos(a)*maxR, Math.sin(a)*maxR, base, G.weight); }
+    }
+    if(_pass==='lines' || !G.labels) return;
+    _P.textAlign(LEFT,BOTTOM); if(maxR/rs<100) for(let r=rs; r<=(G.clip?rGridExtent():maxR); r+=rs){ if(Math.round(r/rs)%5===0) lbl((r|0)+'', 0,-r,4,-2); }
+    _P.textAlign(CENTER,CENTER); let midF=(G.polarLabelAt==='mid')?0.5:0;
     for(let i=0;i<sc;i++){ let a=a0+(i+midF)/sc*Math.PI*2, lr=rGridExtent()*1.03+G.labelRingPad, txt;
       if(G.radialMode==='letters') txt=String.fromCharCode(65+(i%26));
       else if(G.radialMode==='magnetic'){ let b=(Math.round(a0*180/Math.PI+(i+midF)/sc*360+90)%360+360)%360; txt=('00'+b).slice(-3); }
@@ -711,21 +719,21 @@ const GRID = (function(){
       lbl(txt, Math.cos(a)*lr, Math.sin(a)*lr, 0, 0); }
   }
   function drawHex(){
-    let V=VIS(), s=G.hexSize, dc=drawingContext, col=rgba(G.color,G.opacity);
+    let V=VIS(), s=G.hexSize, dc=_P.drawingContext, col=rgba(G.color,G.opacity);
     let w=G.hexFlat?s*1.5:Math.sqrt(3)*s, h=G.hexFlat?Math.sqrt(3)*s:s*1.5;
     let cols=(V.x1-V.x0)/w, rows=(V.y1-V.y0)/h; if(cols*rows>2500) return;
-    dc.strokeStyle=col; dc.lineWidth=G.weight; applyLineStyle(G.majorStyle);
-    let showLab=G.labels && s*_z>=16, R=rGridExtent(); if(showLab) textAlign(CENTER,CENTER);
+    let doLines=_pass!=='labels', doLabels=_pass!=='lines' && G.labels && s*_z>=16, R=rGridExtent();
+    if(doLines){ dc.strokeStyle=col; dc.lineWidth=G.weight; applyLineStyle(G.majorStyle); }
+    if(doLabels) _P.textAlign(CENTER,CENTER);
     for(let r=Math.floor(V.y0/h)-1; r<=V.y1/h+1; r++){
       for(let c=Math.floor(V.x0/w)-1; c<=V.x1/w+1; c++){
         let ox=G.hexFlat?c*w:c*w+(r&1?w/2:0), oy=G.hexFlat?r*h+(c&1?h/2:0):r*h;
-        dc.beginPath(); for(let k=0;k<6;k++){ let ang=(Math.PI/180)*(60*k+(G.hexFlat?0:30)), p=S(ox+Math.cos(ang)*s, oy+Math.sin(ang)*s); if(k===0)dc.moveTo(p.x,p.y); else dc.lineTo(p.x,p.y); }
-        dc.closePath(); dc.stroke();
-        if(showLab && insideB(ox,oy,R)){ let q=G.hexFlat?c:c-Math.floor(r/2), ar=G.hexFlat?r-Math.floor(c/2):r; lbl(q+','+ar, ox, oy, 0, 0); } } }
+        if(doLines){ dc.beginPath(); for(let k=0;k<6;k++){ let ang=(Math.PI/180)*(60*k+(G.hexFlat?0:30)), p=S(ox+Math.cos(ang)*s, oy+Math.sin(ang)*s); if(k===0)dc.moveTo(p.x,p.y); else dc.lineTo(p.x,p.y); } dc.closePath(); dc.stroke(); }
+        if(doLabels && insideB(ox,oy,R)){ let q=G.hexFlat?c:c-Math.floor(r/2), ar=G.hexFlat?r-Math.floor(c/2):r; lbl(q+','+ar, ox, oy, 0, 0); } } }
   }
-  function segIso(ax,ay,bx,by,col,w){ let a=iso2s(ax,ay,0), b=iso2s(bx,by,0), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
-  function isoLabel(txt,wx,wy){ let s=iso2s(wx,wy,0); noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); text(txt, s.x+G.labelOffX, s.y+G.labelOffY); }
-  function drawIsoLabels(R,sp,kmax){ textAlign(CENTER,CENTER);
+  function segIso(ax,ay,bx,by,col,w){ let a=iso2s(ax,ay,0), b=iso2s(bx,by,0), dc=_P.drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
+  function isoLabel(txt,wx,wy){ let s=iso2s(wx,wy,0); _P.noStroke(); _P.fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); _P.textSize(G.labelSize); _P.text(txt, s.x+G.labelOffX, s.y+G.labelOffY); }
+  function drawIsoLabels(R,sp,kmax){ _P.textAlign(CENTER,CENTER);
     if(G.sqLabelMode==='world'){ for(let k=-kmax;k<=kmax;k++){ if(k%G.sqMajor) continue; isoLabel((k*sp|0)+'',k*sp,0); if(k!==0) isoLabel((k*sp|0)+'',0,k*sp); } return; }
     if(sp*_z<34) return;
     let kMin=Math.ceil(-R/sp), maxIdx=Math.floor(R/sp-0.5)-kMin;
@@ -737,27 +745,53 @@ const GRID = (function(){
   }
   function drawIso(){
     let R=rGridExtent(), sp=G.sqSpacing; if(R/sp>500) return;
-    let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9)), axc=rgba(G.color,Math.min(1,G.opacity*2.6));
-    let kmax=Math.floor(R/sp), ext=(v)=>G.boundaryShape==='square'?R:Math.sqrt(Math.max(0,R*R-v*v));
-    for(let k=-kmax;k<=kmax;k++){ let w=k*sp, major=(k%G.sqMajor===0), axis=(k===0); applyLineStyle((major||axis)?G.majorStyle:G.minorStyle);
-      let col=axis?axc:(major?majc:base), lw=(axis?G.weight*2:(major?G.weight*1.6:G.weight)), e=ext(w); segIso(w,-e,w,e,col,lw); segIso(-e,w,e,w,col,lw); }
-    if(G.labels && sp*_z>=20) drawIsoLabels(R,sp,kmax);
+    let kmax=Math.floor(R/sp);
+    if(_pass!=='labels'){
+      let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9)), axc=rgba(G.color,Math.min(1,G.opacity*2.6));
+      let ext=(v)=>G.boundaryShape==='square'?R:Math.sqrt(Math.max(0,R*R-v*v));
+      for(let k=-kmax;k<=kmax;k++){ let w=k*sp, major=(k%G.sqMajor===0), axis=(k===0); applyLineStyle((major||axis)?G.majorStyle:G.minorStyle);
+        let col=axis?axc:(major?majc:base), lw=(axis?G.weight*2:(major?G.weight*1.6:G.weight)), e=ext(w); segIso(w,-e,w,e,col,lw); segIso(-e,w,e,w,col,lw); }
+    }
+    if(_pass!=='lines' && G.labels && sp*_z>=20) drawIsoLabels(R,sp,kmax);
   }
+  function renderGrid(P,pass){                                                 // draw the grid to target P (window | bake buffer); pass = lines | labels | both
+    let pv=_P, ps=_pass; _P=P; _pass=pass;
+    P.push(); P.blendMode(BLEND);
+    let clipped=(G.type!=='iso' && G.clip);                                     // screen-space clip can't follow the iso plane; iso bounds itself to the radius
+    if(clipped){ let dc=P.drawingContext, o=S(0,0); dc.save(); boundaryPath(dc,o, rGridExtent()*_z); dc.clip(); }
+    if(G.type==='square') drawSquare(); else if(G.type==='hex') drawHex(); else if(G.type==='iso') drawIso(); else drawPolar();
+    if(clipped) P.drawingContext.restore();
+    P.drawingContext.setLineDash([]); P.drawingContext.lineCap='butt';
+    if(pass!=='labels'){                                                        // boundary + origin ride with the lines
+      if(G.showBoundary){ let dc=P.drawingContext, col=rgba(G.boundaryColor,G.boundaryOpacity), lw=Math.max(1.5,G.weight*1.5);
+        if(G.type==='iso') drawProjBoundary(rbEdge(), col, lw); else { let o=S(0,0); dc.strokeStyle=col; dc.lineWidth=lw; boundaryPath(dc,o, rbEdge()*_z); dc.stroke(); } }
+      if(G.showOrigin){ let o=proj(0,0), dc=P.drawingContext, oc=rgba(G.boundaryColor,Math.min(1,G.boundaryOpacity+0.1));
+        dc.strokeStyle=oc; dc.lineWidth=1.5; dc.beginPath(); dc.moveTo(o.x-7,o.y); dc.lineTo(o.x+7,o.y); dc.moveTo(o.x,o.y-7); dc.lineTo(o.x,o.y+7); dc.stroke();
+        dc.fillStyle=oc; dc.beginPath(); dc.arc(o.x,o.y,2.5,0,Math.PI*2); dc.fill(); } }
+    P.pop(); _P=pv; _pass=ps;
+  }
+  function ensureBuf(w,h){ if(!_buf || _buf.width!==w || _buf.height!==h){ _buf=createGraphics(w,h); _buf.pixelDensity(1); } _buf.clear(); }
+  function cfgSig(){ return JSON.stringify(G)+'|'+CFG.gen.radius+'|'+width+'x'+height; }   // any grid / galaxy-radius / canvas-size change -> re-bake
   function draw(camX,camY,camZoom,force){
     if(!force && !CFG.grid.on) return;
     G=CFG.grid; setCam(camX,camY,camZoom);
-    push(); blendMode(BLEND);
-    let clipped=(G.type!=='iso' && G.clip);                                     // screen-space clip can't follow the iso plane; iso bounds itself to the radius
-    if(clipped){ let dc=drawingContext, o=S(0,0); dc.save(); boundaryPath(dc,o, rGridExtent()*_z); dc.clip(); }
-    if(G.type==='square') drawSquare(); else if(G.type==='hex') drawHex(); else if(G.type==='iso') drawIso(); else drawPolar();
-    if(clipped) drawingContext.restore();
-    drawingContext.setLineDash([]); drawingContext.lineCap='butt';
-    if(G.showBoundary){ let dc=drawingContext, col=rgba(G.boundaryColor,G.boundaryOpacity), lw=Math.max(1.5,G.weight*1.5);
-      if(G.type==='iso') drawProjBoundary(rbEdge(), col, lw); else { let o=S(0,0); dc.strokeStyle=col; dc.lineWidth=lw; boundaryPath(dc,o, rbEdge()*_z); dc.stroke(); } }
-    if(G.showOrigin){ let o=proj(0,0), dc=drawingContext, oc=rgba(G.boundaryColor,Math.min(1,G.boundaryOpacity+0.1));
-      dc.strokeStyle=oc; dc.lineWidth=1.5; dc.beginPath(); dc.moveTo(o.x-7,o.y); dc.lineTo(o.x+7,o.y); dc.moveTo(o.x,o.y-7); dc.lineTo(o.x,o.y+7); dc.stroke();
-      dc.fillStyle=oc; dc.beginPath(); dc.arc(o.x,o.y,2.5,0,Math.PI*2); dc.fill(); }
-    pop();
+    if(force || !G.bakeOn || width<2 || height<2){ renderGrid(window,'both'); return; }   // isolated preview, bake off, or canvas not sized yet -> fully live
+    let mode=(G.type==='iso')?'cache':G.bakeMode;                              // iso can't map-bake cleanly (sheared plane) -> screen cache
+    let inBuf=G.bakeLabels?'both':'lines';                                     // labels split out of the bake stay live + crisp on top
+    if(mode==='map'){                                                          // B: bake into a map-space image that pans/zooms via a transform; re-bakes only on config change
+      let E=rbEdge()*1.05, RES=1024, sig='map|'+E.toFixed(1)+'|'+inBuf+'|'+cfgSig();
+      if(sig!==_bufSig){ ensureBuf(RES,RES);
+        let s=[_px,_py,_z,_cx,_cy,_bx0,_by0,_bx1,_by1];
+        _px=RES/2; _py=RES/2; _z=RES/(2*E); _cx=0; _cy=0; _bx0=0;_by0=0;_bx1=RES;_by1=RES;   // world -> buffer projection + bounds
+        renderGrid(_buf,inBuf);
+        _px=s[0];_py=s[1];_z=s[2];_cx=s[3];_cy=s[4];_bx0=s[5];_by0=s[6];_bx1=s[7];_by1=s[8]; _bufSig=sig; }
+      push(); imageMode(CORNER); image(_buf, _px+(_cx-E)*_z, _py+(_cy-E)*_z, 2*E*_z, 2*E*_z); pop();
+    } else {                                                                    // A: screen cache — re-bake only when camera / config / size change
+      let sig='cache|'+_cx.toFixed(2)+','+_cy.toFixed(2)+','+_z.toFixed(4)+'|'+inBuf+'|'+cfgSig();
+      if(sig!==_bufSig){ ensureBuf(width,height); renderGrid(_buf,inBuf); _bufSig=sig; }
+      push(); imageMode(CORNER); image(_buf, 0,0); pop();
+    }
+    if(!G.bakeLabels) renderGrid(window,'labels');                             // the split: labels drawn live on top of the baked lines
   }
   // ---- coordinates readout (ported from grid_exhibit): a measurement HUD over the frame ----
   function s2w(sx,sy){ let z=_z;                                                 // screen -> world (inverse of the active projection)
@@ -1449,7 +1483,8 @@ const GRID_SCHEMA = [
   ['Isometric', [['isoRot','Yaw / spin','range',0,360,5],['isoPitch','Pitch (squash)','range',0.2,1.4,0.05],['sqSpacing','Floor spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1]]],
   ['Labels', [['labels','Labels','bool'],['radialMode','Radial labels','select',[['letters','Letters (A,B,C)'],['degrees','Degrees'],['magnetic','Magnetic radials']]],['labelColor','Color','color'],['labelSize','Size','range',8,20,1]]],
   ['Label placement', [['labelPos','Cell anchor','select',[['center','Center'],['top','Top'],['bottom','Bottom'],['left','Left'],['right','Right'],['tl','Top-left'],['tr','Top-right'],['bl','Bottom-left'],['br','Bottom-right']]],['labelOffX','Offset X','range',-30,30,1],['labelOffY','Offset Y','range',-30,30,1],['polarZero','Polar 0° at','select',[['east','East →'],['north','North ↑'],['west','West ←'],['south','South ↓']]],['polarLabelAt','Polar labels','select',[['line','On spoke line'],['mid','Wedge midpoint']]]]],
-  ['Coordinates readout', [['coMouse','Mouse','bool'],['coWaypoint','Waypoint','bool'],['coSystem','System','bool'],['coPixel','Show pixels','bool'],['coPct','Show %','bool'],['coWorld','Show world','bool'],['coDatum','World datum','select',[['grid','Grid frame'],['gen','Generation (x,y)']]],['coYup','Y-up world','bool'],['coRelative','Relative','bool'],['coRelFrom','Measure from','select',[['wp','Waypoint'],['sys','System'],['mouse','Mouse']]]]]
+  ['Coordinates readout', [['coMouse','Mouse','bool'],['coWaypoint','Waypoint','bool'],['coSystem','System','bool'],['coPixel','Show pixels','bool'],['coPct','Show %','bool'],['coWorld','Show world','bool'],['coDatum','World datum','select',[['grid','Grid frame'],['gen','Generation (x,y)']]],['coYup','Y-up world','bool'],['coRelative','Relative','bool'],['coRelFrom','Measure from','select',[['wp','Waypoint'],['sys','System'],['mouse','Mouse']]]]],
+  ['Bake (performance)', [['bakeOn','Bake grid','bool'],['bakeMode','Mode','select',[['cache','A · cache (crisp, idle)'],['map','B · map (scales, pan/zoom)']]],['bakeLabels','Bake labels too','bool']]]
 ];
 const GRID_PRESETS = {
   blueprint:{name:'Blueprint (square)', ov:{type:'square',color:[70,140,210],opacity:0.45,weight:1,sqSpacing:150,sqMajor:5,labels:true,showBoundary:true,boundaryColor:[120,200,255]}},
