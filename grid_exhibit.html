@@ -31,7 +31,7 @@
 </div>
 <div id="panel"></div>
 <script>
-const BUILD_DATE='20260718', BUILD_SEQ='09', BUILD_ID='grid_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
+const BUILD_DATE='20260718', BUILD_SEQ='10', BUILD_ID='grid_v0.1_'+BUILD_DATE+'.'+BUILD_SEQ;
 const PANELW=256, TOPH=31;
 
 // ---------- config ----------
@@ -54,7 +54,12 @@ let G = {
   labelPos:'center', labelOffX:0, labelOffY:0,   // square cell-label anchor (9-pos) + universal pixel nudge
   polarZero:'east', polarLabelAt:'line',          // where polar 0deg points + spoke-line vs wedge-midpoint
   // context systems
-  showSystems:true, systemCount:60, systemSeed:1234
+  showSystems:true, systemCount:60, systemSeed:1234,
+  // coordinates readout
+  coMouse:true, coWaypoint:false, coSystem:false,   // targets: mouse pointer / placed waypoint / nearest system
+  coPixel:false, coPct:false, coWorld:true,          // fields shown per target
+  coDatum:'grid', coYup:false,                       // world datum: 'grid'=grid frame · 'gen'=raw x,y; coYup flips displayed world Y so +Y = up/north (battle-map convention)
+  coRelative:false, coRelFrom:'wp'                   // relative range + compass bearing FROM a reference marker (wp | sys | mouse) to the other markers
 };
 const PRESETS = {
   blueprint:{name:'Blueprint (square)', ov:{type:'square',color:[70,140,210],opacity:0.45,weight:1,sqSpacing:150,sqMajor:5,labels:true,showBoundary:true,boundaryColor:[120,200,255]}},
@@ -83,7 +88,8 @@ const SCHEMA = [
   ['Isometric', [['isoRot','Yaw / spin','range',0,360,5],['isoPitch','Pitch (squash)','range',0.2,1.4,0.05],['sqSpacing','Floor spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1]]],
   ['Labels', [['labels','Labels','bool'],['radialMode','Radial labels','select',[['letters','Letters (A,B,C)'],['degrees','Degrees'],['magnetic','Magnetic radials']]],['labelColor','Color','color'],['labelSize','Size','range',8,20,1]]],
   ['Label placement', [['labelPos','Cell anchor','select',[['center','Center'],['top','Top'],['bottom','Bottom'],['left','Left'],['right','Right'],['tl','Top-left'],['tr','Top-right'],['bl','Bottom-left'],['br','Bottom-right']]],['labelOffX','Offset X','range',-30,30,1],['labelOffY','Offset Y','range',-30,30,1],['polarZero','Polar 0° at','select',[['east','East →'],['north','North ↑'],['west','West ←'],['south','South ↓']]],['polarLabelAt','Polar labels','select',[['line','On spoke line'],['mid','Wedge midpoint']]]]],
-  ['Context', [['showSystems','Show systems','bool'],['systemCount','Count','range',0,300,5],['systemSeed','Seed','range',1,9999,1]]]
+  ['Context', [['showSystems','Show systems','bool'],['systemCount','Count','range',0,300,5],['systemSeed','Seed','range',1,9999,1]]],
+  ['Coordinates', [['coMouse','Mouse','bool'],['coWaypoint','Waypoint','bool'],['coSystem','System','bool'],['coPixel','Show pixels','bool'],['coPct','Show %','bool'],['coWorld','Show world','bool'],['coDatum','World datum','select',[['grid','Grid frame'],['gen','Generation (x,y)']]],['coYup','Y-up world','bool'],['coRelative','Relative','bool'],['coRelFrom','Measure from','select',[['wp','Waypoint'],['sys','System'],['mouse','Mouse']]]]]
 ];
 
 // ---------- camera / projection ----------
@@ -108,7 +114,7 @@ function drawProjBoundary(r,colStr,lw){ let dc=drawingContext; dc.strokeStyle=co
 // ---------- systems (placeholder galaxy for context) ----------
 let systems=[];
 function genSystems(){ systems=[]; let rs=(G.systemSeed>>>0)||1, rnd=()=>{ rs=(rs*1664525+1013904223)>>>0; return rs/4294967296; };
-  for(let i=0;i<(G.systemCount|0);i++){ let a=rnd()*Math.PI*2, r=Math.sqrt(rnd())*G.radius*0.94; systems.push({x:Math.cos(a)*r, y:Math.sin(a)*r, t:rnd()}); } }
+  for(let i=0;i<(G.systemCount|0);i++){ let a=rnd()*Math.PI*2, r=Math.sqrt(rnd())*G.radius*0.94; systems.push({id:i, x:Math.cos(a)*r, y:Math.sin(a)*r, t:rnd()}); } }
 
 // ---------- draw helpers ----------
 function rgba(c,a){ return 'rgba('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+a+')'; }
@@ -162,11 +168,11 @@ function drawSquareGrid(){
         textAlign(CENTER,BOTTOM);
         for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ if(Math.round(wx/sp)%G.sqMajor) continue; let sx=w2s(wx,0).x; if(sx>=PANELW && sx<=width) text((wx|0)+'', sx+G.labelOffX, yB+G.labelOffY); }   // X on bottom rail, follows its vertical line
         textAlign(LEFT,CENTER);
-        for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor||k===0) continue; let sy=w2s(0,wy).y; if(sy>=TOPH && sy<=height) text((wy|0)+'', xL+G.labelOffX, sy+G.labelOffY); }   // Y on left rail (clear of the panel), follows its horizontal line
+        for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor||k===0) continue; let sy=w2s(0,wy).y; if(sy>=TOPH && sy<=height) text((dispY(wy)|0)+'', xL+G.labelOffX, sy+G.labelOffY); }   // Y on left rail (clear of the panel), follows its horizontal line
       } else { textAlign(CENTER,TOP);
         for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp); if(k%G.sqMajor===0) label((wx|0)+'', wx, 0, 0, 4); }
         textAlign(LEFT,CENTER);
-        for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor===0 && k!==0) label((wy|0)+'', 0, wy, 5, 0); }
+        for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor===0 && k!==0) label((dispY(wy)|0)+'', 0, wy, 5, 0); }
       }
     } else if(G.sqLabelMode==='line'){                                            // number the grid lines themselves; major/minor tiers toggle independently, edge-anchored 0..max (invert-aware)
       let kMin=Math.ceil(-G.radius/sp), maxL=Math.floor(G.radius/sp)-kMin, zMinor=sp*cam.zoom>=22;
@@ -249,7 +255,7 @@ function drawIsoGrid(){                                                        /
 function segIso(ax,ay,bx,by,col,w){ let a=iso2s(ax,ay,0), b=iso2s(bx,by,0), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
 function isoLabel(txt,wx,wy){ let s=iso2s(wx,wy,0); noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); text(txt, s.x+G.labelOffX, s.y+G.labelOffY); }
 function drawIsoLabels(R,sp,kmax){ textAlign(CENTER,CENTER);
-  if(G.sqLabelMode==='world'){ for(let k=-kmax;k<=kmax;k++){ if(k%G.sqMajor) continue; isoLabel((k*sp|0)+'',k*sp,0); if(k!==0) isoLabel((k*sp|0)+'',0,k*sp); } return; }
+  if(G.sqLabelMode==='world'){ for(let k=-kmax;k<=kmax;k++){ if(k%G.sqMajor) continue; isoLabel((k*sp|0)+'',k*sp,0); if(k!==0) isoLabel((dispY(k*sp)|0)+'',0,k*sp); } return; }
   if(sp*cam.zoom<34) return;                                                   // cell coords need room to read
   let kMin=Math.ceil(-R/sp), maxIdx=Math.floor(R/sp-0.5)-kMin;                  // edge-anchored, same convention as the square grid
   for(let k=Math.floor(-R/sp);(k+0.5)*sp<=R;k++){ let cRaw=k-kMin; if(cRaw<0||cRaw>maxIdx) continue;
@@ -259,8 +265,75 @@ function drawIsoLabels(R,sp,kmax){ textAlign(CENTER,CENTER);
       isoLabel(G.sqLabelMode==='index'?('('+col+','+row+')'):(G.sqLabelMode==='line'?(''+col):(colLetter(col)+(row+1))), cxw, cyw); } }
 }
 
+// ---------- coordinates readout ----------
+let coWp=null, coSelSys=null, pressPt=null;
+function s2w(sx,sy){ let z=cam.zoom;                                              // screen -> world (inverse of the active projection)
+  if(G.type==='iso'){ let ix=(sx-cx())/z-cam.x, iy=(sy-cy())/z-cam.y, A=ix/ISO_COS, B=iy/(ISO_SIN*G.isoPitch), rx=(A+B)/2, ry=(B-A)/2, a=G.isoRot*Math.PI/180;
+    return { x: rx*Math.cos(a)+ry*Math.sin(a), y: -rx*Math.sin(a)+ry*Math.cos(a) }; }
+  return { x:(sx-cx())/z-cam.x, y:(sy-cy())/z-cam.y }; }
+function axialRound(q,r){ let x=q, z=r, y=-x-z, rx=Math.round(x), ry=Math.round(y), rz=Math.round(z);   // cube rounding -> nearest hex
+  let dx=Math.abs(rx-x), dy=Math.abs(ry-y), dz=Math.abs(rz-z);
+  if(dx>dy && dx>dz) rx=-ry-rz; else if(dy>dz) ry=-rx-rz; else rz=-rx-ry;
+  return { q:rx, r:rz }; }
+function dispY(wy){ return G.coYup ? -wy : wy; }   // presentation flip: +Y = up/north when coYup on (internal world space stays Y-down for w2s / rendering / placement)
+function genCoordStr(wx,wy){ return 'x'+Math.round(wx)+' y'+Math.round(dispY(wy))+' r'+Math.round(Math.hypot(wx,wy)); }   // raw generation frame: core origin, world units
+function gridCoordStr(wx,wy){                                                     // the point's address in the active grid frame
+  if(G.type==='polar'){ let r=Math.hypot(wx,wy), ring=Math.floor(r/G.ringSpacing)+1, a0=(POLAR_ZERO[G.polarZero]||0)+G.angleOffset, th=Math.atan2(wy,wx)*180/Math.PI;
+    let rel=((th-a0)%360+360)%360, sc=G.spokeCount|0, wedge=sc>0?Math.floor(rel/(360/sc)):0, bearing=((th+90)%360+360)%360;
+    let sect = sc>0 ? ' '+String.fromCharCode(65+(wedge%26)) : '';                       // radial sector (spoke wedge)
+    let ang = G.radialMode==='degrees' ? (Math.round(rel)+'°') : (('00'+Math.round(bearing)).slice(-3));   // bearing: relative° in degrees mode, else compass (N=000)
+    return 'R'+ring+sect+' · r'+Math.round(r)+' · '+ang; }                                // ring · radial · distance · bearing
+  if(G.type==='hex'){ let s=G.hexSize, q, rr; if(G.hexFlat){ q=(2/3)*(wx/s); rr=(wy/(s*Math.sqrt(3)))-q/2; } else { rr=(2/3)*(wy/s); q=(wx/(s*Math.sqrt(3)))-rr/2; }
+    let h=axialRound(q,rr); return h.q+','+h.r; }
+  let sp=G.sqSpacing, kMin=Math.ceil(-G.radius/sp), maxIdx=Math.floor(G.radius/sp-0.5)-kMin;   // square / iso: cell address per the square label mode
+  let cRaw=Math.floor(wx/sp)-kMin, rRaw=Math.floor(wy/sp)-kMin;
+  if(G.sqLabelMode==='world') return 'x'+Math.round(wx)+' y'+Math.round(dispY(wy));
+  if(cRaw<0||cRaw>maxIdx||rRaw<0||rRaw>maxIdx) return 'out';
+  let col=G.invertX?maxIdx-cRaw:cRaw, row=G.invertY?maxIdx-rRaw:rRaw;
+  return (G.sqLabelMode==='index'||G.sqLabelMode==='line') ? ('('+col+','+row+')') : (colLetter(col)+(row+1)); }
+function coFields(sx,sy,wx,wy){ let out=[];
+  if(G.coPixel) out.push('px  '+Math.round(sx)+', '+Math.round(sy));
+  if(G.coPct){ let px=(sx-PANELW)/Math.max(1,width-PANELW)*100, py=(sy-TOPH)/Math.max(1,height-TOPH)*100; out.push('%   '+px.toFixed(1)+', '+py.toFixed(1)); }
+  if(G.coWorld) out.push((G.coDatum==='gen'?'gen ':'grid ')+(G.coDatum==='gen'?genCoordStr(wx,wy):gridCoordStr(wx,wy)));
+  return out; }
+function drawWaypoint(px,py){ let dc=drawingContext; dc.strokeStyle='rgba(120,255,180,0.95)'; dc.fillStyle='rgba(120,255,180,0.22)'; dc.lineWidth=1.5; dc.setLineDash([]);
+  dc.beginPath(); dc.moveTo(px,py-8); dc.lineTo(px+8,py); dc.lineTo(px,py+8); dc.lineTo(px-8,py); dc.closePath(); dc.fill(); dc.stroke();
+  dc.beginPath(); dc.moveTo(px-12,py); dc.lineTo(px+12,py); dc.moveTo(px,py-12); dc.lineTo(px,py+12); dc.stroke(); }
+function drawReadout(blocks){ let dc=drawingContext; textSize(11); textAlign(LEFT,TOP);
+  let lines=[]; for(const b of blocks){ lines.push({s:b.t,hd:true}); for(const f of b.f) lines.push({s:f,hd:false}); }
+  let pad=8, lh=15, w=118; for(const l of lines) w=Math.max(w, textWidth(l.s)); w+=pad*2;
+  let h=lines.length*lh+pad*2, x=width-w-8, y=TOPH+8;
+  dc.setLineDash([]); dc.fillStyle='rgba(6,14,22,0.88)'; dc.strokeStyle='rgba(90,160,180,0.6)'; dc.lineWidth=1; dc.beginPath(); dc.rect(x,y,w,h); dc.fill(); dc.stroke();
+  let ty=y+pad; for(const l of lines){ noStroke(); fill(l.hd?'#8fe0f0':'#c8e8f0'); textStyle(l.hd?BOLD:NORMAL); text(l.s, x+pad, ty); ty+=lh; } textStyle(NORMAL); }
+const REF_LBL={wp:'WP', sys:'SYS', mouse:'MOU'};
+function refPos(key){                                                             // world pos of a *visible* marker to measure relative range/bearing FROM
+  if(key==='wp')  return (G.coWaypoint && coWp) ? {x:coWp.x, y:coWp.y} : null;
+  if(key==='sys') return (G.coSystem && coSelSys) ? {x:coSelSys.x, y:coSelSys.y} : null;
+  if(key==='mouse' && G.coMouse && mouseX>PANELW && mouseY>TOPH){ let w=s2w(mouseX,mouseY); return {x:w.x, y:w.y}; }
+  return null; }
+function drawCoords(){
+  if(G.coSystem){ if(mouseX>PANELW && mouseY>TOPH){ let best=400, sel=null; for(const s of systems){ let p=proj(s.x,s.y), dx=p.x-mouseX, dy=p.y-mouseY, d=dx*dx+dy*dy; if(d<best){ best=d; sel=s; } } coSelSys=sel; } } else coSelSys=null;
+  if(G.coWaypoint && !coWp) coWp={ x:-cam.x, y:-cam.y };                          // first enable: drop at the view centre; click the map to move it
+  let dc=drawingContext; dc.setLineDash([]);
+  if(G.coWaypoint && coWp){ let p=proj(coWp.x,coWp.y); drawWaypoint(p.x,p.y); }
+  if(G.coSystem && coSelSys){ let p=proj(coSelSys.x,coSelSys.y); dc.strokeStyle='rgba(255,220,120,0.95)'; dc.lineWidth=1.5; dc.beginPath(); dc.arc(p.x,p.y,9,0,Math.PI*2); dc.stroke(); }
+  // active targets with world + screen positions
+  let T={};
+  if(G.coMouse && mouseX>PANELW && mouseY>TOPH){ let w=s2w(mouseX,mouseY); T.mouse={t:'MOUSE', wx:w.x, wy:w.y, sx:mouseX, sy:mouseY}; }
+  if(G.coWaypoint && coWp){ let p=proj(coWp.x,coWp.y); T.wp={t:'WAYPOINT', wx:coWp.x, wy:coWp.y, sx:p.x, sy:p.y}; }
+  if(G.coSystem && coSelSys){ let p=proj(coSelSys.x,coSelSys.y); T.sys={t:'SYS #'+coSelSys.id, wx:coSelSys.x, wy:coSelSys.y, sx:p.x, sy:p.y}; }
+  let ref = G.coRelative ? refPos(G.coRelFrom) : null, refS = ref ? proj(ref.x,ref.y) : null;   // relative-measurement origin (a visible marker)
+  let blocks=[];
+  for(const k of ['mouse','wp','sys']){ let e=T[k]; if(!e) continue;
+    let f=coFields(e.sx,e.sy,e.wx,e.wy);
+    if(ref && k!==G.coRelFrom){ let dx=e.wx-ref.x, dy=e.wy-ref.y, rng=Math.hypot(dx,dy), brg=((Math.atan2(dy,dx)*180/Math.PI+90)%360+360)%360;   // compass bearing FROM ref TO this marker
+      f.push('fr'+REF_LBL[G.coRelFrom]+' r'+Math.round(rng)+' · '+('00'+Math.round(brg)).slice(-3));
+      dc.strokeStyle='rgba(255,205,120,0.55)'; dc.lineWidth=1; dc.setLineDash([4,4]); dc.beginPath(); dc.moveTo(refS.x,refS.y); dc.lineTo(e.sx,e.sy); dc.stroke(); dc.setLineDash([]); }
+    blocks.push({t:e.t, f:f}); }
+  if(blocks.length) drawReadout(blocks); }
+
 // ---------- main ----------
-function setup(){ pixelDensity(1); createCanvas(windowWidth,windowHeight); genSystems(); buildPanel(); }   // opens at cam.zoom=0.20; use Recenter to auto-fit
+function setup(){ pixelDensity(1); createCanvas(windowWidth,windowHeight); textFont('monospace'); genSystems(); buildPanel(); }   // opens at cam.zoom=0.20; use Recenter to auto-fit
 function windowResized(){ resizeCanvas(windowWidth,windowHeight); }
 function draw(){
   background(G.bg[0],G.bg[1],G.bg[2]);
@@ -283,10 +356,13 @@ function draw(){
   if(G.showOrigin){ let o=proj(0,0), dc=drawingContext, oc=rgba(G.boundaryColor,Math.min(1,G.boundaryOpacity+0.1));
     dc.strokeStyle=oc; dc.lineWidth=1.5; dc.beginPath(); dc.moveTo(o.x-7,o.y); dc.lineTo(o.x+7,o.y); dc.moveTo(o.x,o.y-7); dc.lineTo(o.x,o.y+7); dc.stroke();
     dc.fillStyle=oc; dc.beginPath(); dc.arc(o.x,o.y,2.5,0,Math.PI*2); dc.fill(); }
+  drawCoords();   // coordinate readouts (mouse / waypoint / system) on top
   document.getElementById('stat').textContent = Math.round(frameRate())+' fps · zoom '+cam.zoom.toFixed(2)+' · '+BUILD_ID;
 }
 function mouseDragged(){ if(mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; } }
 function mouseWheel(e){ if(mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.03, 8); return false; } }
+function mousePressed(){ if(mouseX>PANELW && mouseY>TOPH) pressPt={x:mouseX,y:mouseY}; }
+function mouseReleased(){ if(pressPt && G.coWaypoint && Math.hypot(mouseX-pressPt.x,mouseY-pressPt.y)<5){ let w=s2w(mouseX,mouseY); coWp={x:w.x,y:w.y}; }  pressPt=null; }   // a click (not a drag) drops the waypoint
 
 // ---------- controls ----------
 function rgbToHex(c){ return '#'+[0,1,2].map(i=>('0'+(c[i]|0).toString(16)).slice(-2)).join(''); }
@@ -312,7 +388,7 @@ function buildPanel(){
       panel.appendChild(row);
     }
   }
-  let hint=document.createElement('div'); hint.className='hint'; hint.textContent='World-space map grid — drag to pan, wheel to zoom (it stays anchored to the galaxy origin + radius, like the fade Map track will). Boundary circle = the galaxy edge (Radius). Presets up top. Recenter frames the boundary.'; panel.appendChild(hint);
+  let hint=document.createElement('div'); hint.className='hint'; hint.textContent='World-space map grid — drag to pan, wheel to zoom (it stays anchored to the galaxy origin + radius, like the fade Map track will). Boundary circle = the galaxy edge (Radius). Presets up top. Recenter frames the boundary. Coordinates section: toggle Mouse/Waypoint/System readouts; click the map to drop the waypoint.'; panel.appendChild(hint);
 }
 function applyPreset(name){ let p=PRESETS[name]; if(!p) return; curPreset=name; let ov=JSON.parse(JSON.stringify(p.ov)); Object.assign(G, ov);
   if(!('minorColor' in ov)) G.minorColor=G.color.slice();   // presets that don't set a minor color inherit the major color, so the minor lattice stays hue-coherent

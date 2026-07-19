@@ -6,11 +6,13 @@ decisions*, not implementation detail (read `grid_exhibit.html` for the running
 model). Status tags: **[BUILT]** in the exhibit · **[DECIDED]** agreed, not yet
 canonical · **[TBD]** open.
 
-**Anchor:** `grid_v0.1_20260718.09` — square/polar/hex grids · cell + line labelling ·
+**Anchor:** `grid_v0.1_20260718.10` — square/polar/hex grids · cell + line labelling ·
 per-axis invert · line numbering + subdivisions · label placement (anchor / offset /
 polar 0° orientation / spoke-line vs midpoint) · radial labels (letters / degrees /
 magnetic bearings) · isometric floor (yaw / pitch) · hex axial `(q,r)` · screen-edge axis
-labels · independent major/minor color + brightness + opacity + line style.
+labels · independent major/minor color + brightness + opacity + line style · coordinate
+readout (mouse/waypoint/system · px/%/world · grid vs generation datum · Y-up · polar and
+relative range+bearing).
 
 ## Why this exists
 
@@ -175,18 +177,83 @@ Placeholder systems (seeded LCG, count/seed controls) scattered inside the bound
 purely for **scale reference**, so grid density can be judged against a realistic star
 field. Not the real generator.
 
+## Coordinates readout **[BUILT]**
+
+A measurement instrument laid over the frame — reads any point's position in whatever
+convention you're auditioning, so the addressing schemes above can be *checked*, not just
+drawn. Everything projects through the same camera as the grid (world→screen `w2s` and its
+inverse `s2w`, which also un-projects the isometric floor), so a reading is a property of
+the galaxy, not the view.
+
+### Targets — what gets measured
+
+Any combination, live:
+
+| Target | Picked by | Marker |
+|---|---|---|
+| **Mouse** | cursor over the map | — |
+| **Waypoint** | click the map to drop it (persists) | green diamond + crosshair |
+| **System** | nearest star to the cursor | yellow ring, shows `#id` |
+
+### Fields — what each reading shows
+
+Toggle independently: **pixels** (canvas px), **%** (viewport position), **world**. The
+first two are screen-space; **world** is the map-space coordinate, resolved through the
+*datum*.
+
+### Datum — how "world" is expressed
+
+The point's world position is reported in one of two frames (the *"which coordinate system
+is the datum"* choice, made switchable):
+
+- **Grid frame** — the point's address in the *active grid*: square → A1 sector / `(col,row)`
+  / world (per the square label mode) · polar → ring · sector · distance · bearing (below) ·
+  hex → axial `(q,r)` (pixel→hex inverse, cube-rounded) · iso → square sectors.
+- **Generation** — raw `x, y, r` in the generation frame (core origin, world units) — the
+  "physics" readout, independent of any grid.
+
+So the same marker reads `E3` (grid) or `x300 y-250 r391` (generation).
+
+### Polar measurement **[BUILT]**
+
+On a polar grid the Grid-frame readout is a full polar fix — **`R{ring} {sector} · r{dist} ·
+{bearing}`** — radial band, spoke sector, true distance-from-core, and bearing at once. The
+bearing follows the frame: compass (`045`, N=000) in magnetic/letters, relative (`45°`) in
+degrees mode, honouring `Polar 0°` / `Angle offset`.
+
+### Relative range & bearing **[BUILT]**
+
+`Relative` + `Measure from` (Waypoint / System / Mouse) adds a **`fr{REF} r{range} ·
+{bearing}`** line to every *other* marker — straight-line distance and compass bearing from
+the chosen reference — and draws a dashed connector between them. Grid-agnostic (Euclidean +
+compass), so it works on every family. This is "range and bearing between two contacts,"
+distinct from the from-core polar fix above.
+
+### Y-up world **[BUILT]**
+
+`Y-up world` flips the *displayed* world Y so **+Y = up / north**, matching the archive
+battle-maps' `screenToWorld` convention (`canvas_Battle_Map`, `AI_Arena` and
+`canvas_ideal_game_look` all invert Y). It is a **presentation flip only** (`dispY()` at the
+readout layer): internal world space stays Y-down, so `w2s` / `s2w`, rendering, waypoint
+placement and the relative round-trips are untouched — only the printed number and the
+world-axis labels change sign. With it on, the exhibit's raw coordinates line up 1:1 with
+those source files. (Independent of the sector-label `Invert rows`, which flips sector
+*counting*; this flips the raw world *value*.)
+
 ## Open questions **[TBD]**
 
 - **Which family is canonical?** Square is the front-runner for sector naming; polar may
   win for "distance from core" gameplay. Possibly both (square for addressing, polar for
   a secondary readout).
-- **How `galaxy_studio` consumes it.** *Partly answered:* the engine is now **ported into
-  `galaxy_studio` as the Grid tab** (`CFG.grid`, build `20260718.01`) — boundary radius =
-  `gen.radius`, projected through the galaxy camera, replacing the old baked backdrop grid
-  overlay. Still open: (a) the fade/nebula/image **Map** track anchors to `gen.radius`
-  independently — it could instead read the grid's boundary (shape / inset); (b) system
-  positions still don't reference sector coordinates; (c) the exhibit and the studio Grid
-  tab are currently a **fork** of the same code, not a shared module.
+- **How `galaxy_studio` consumes it.** *Partly answered:* the grid engine **and the
+  coordinates readout** are now **ported into `galaxy_studio` as the Grid tab** (`CFG.grid`,
+  build `20260719.01`) — boundary radius = `gen.radius`, projected through the galaxy camera,
+  replacing the old baked backdrop grid overlay; the readout's **System** target reads the
+  real `galaxy[]` systems and its datum ties to `gen.radius`. Still open: (a) the
+  fade/nebula/image **Map** track anchors to `gen.radius` independently — it could instead
+  read the grid's boundary (shape / inset); (b) system positions aren't *stored* as sector
+  coordinates (the readout derives them live); (c) the exhibit and the studio Grid tab are
+  currently a **fork** of the same code, not a shared module.
 - **Sector naming scheme.** A1 letters vs numeric `(col,row)` vs polar wedges — tied to
   the family decision above.
 - **Sub-sector addressing.** If subdivisions become meaningful (not just visual), how a
