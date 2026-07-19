@@ -65,7 +65,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260719';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '04';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '05';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -166,6 +166,7 @@ let CFG = {
     labels:true, labelColor:[150,200,235], labelSize:11, radialMode:'letters',
     labelPos:'center', labelOffX:0, labelOffY:0,
     polarZero:'east', polarLabelAt:'line',
+    overlayOn:false, overlayStep:300, overlaySpokes:8, overlayColor:[255,180,90], overlayOpacity:0.5, overlayLabels:true,   // candidate D: radar-style range rings + N-up compass bearing spokes, over any family
     bakeOn:false, bakeMode:'cache', bakeLabels:true,   // grid bake: cache (A, re-bakes on any camera move) | map (B, pan-free — re-blits on pan, re-bakes crisp on zoom); bakeLabels off = labels stay live/crisp on top
     coMouse:true, coWaypoint:false, coSystem:false, coPixel:false, coPct:false, coWorld:true,   // coordinate readout: targets + fields
     coDatum:'grid', coYup:false, coRelative:false, coRelFrom:'wp'                                // world datum (grid|gen) · Y-up flip · relative range/bearing from a reference marker
@@ -754,6 +755,18 @@ const GRID = (function(){
     }
     if(_pass!=='lines' && G.labels && sp*_z>=20) drawIsoLabels(R,sp,kmax);
   }
+  function drawOverlay(){                                                       // candidate D: radar-style range rings + N-up compass bearing spokes, over any family
+    let oc=rgba(G.overlayColor, G.overlayOpacity), maxR=rbEdge(), step=Math.max(20,G.overlayStep), sc=G.overlaySpokes|0;
+    if(_pass!=='labels'){ applyLineStyle('solid');
+      for(let r=step; r<=maxR+0.1; r+=step) circ(r, oc, G.weight);                                  // range rings
+      for(let i=0;i<sc;i++){ let a=(-90 + i*360/sc)*Math.PI/180; seg(0,0, Math.cos(a)*maxR, Math.sin(a)*maxR, oc, G.weight); }   // bearing spokes, 000 = North (up)
+    }
+    if(_pass!=='lines' && G.overlayLabels){ let lc=G.overlayColor;
+      _P.noStroke(); _P.fill(lc[0],lc[1],lc[2],235); _P.textSize(G.labelSize);
+      _P.textAlign(LEFT,BOTTOM); for(let r=step; r<=maxR+0.1; r+=step){ let s=S(0,-r); _P.text((r|0)+'', s.x+4, s.y-2); }   // range labels up the North spoke
+      _P.textAlign(CENTER,CENTER); for(let i=0;i<sc;i++){ let brg=Math.round(i*360/sc), a=(-90+brg)*Math.PI/180, s=S(Math.cos(a)*maxR*1.05, Math.sin(a)*maxR*1.05); _P.text(('00'+brg).slice(-3), s.x, s.y); }   // compass bearing labels
+    }
+  }
   function renderGrid(P,pass){                                                 // draw the grid to target P (window | bake buffer); pass = lines | labels | both
     let pv=_P, ps=_pass; _P=P; _pass=pass;
     P.push(); P.blendMode(BLEND);
@@ -762,6 +775,7 @@ const GRID = (function(){
     if(G.type==='square') drawSquare(); else if(G.type==='hex') drawHex(); else if(G.type==='iso') drawIso(); else drawPolar();
     if(clipped) P.drawingContext.restore();
     P.drawingContext.setLineDash([]); P.drawingContext.lineCap='butt';
+    if(G.overlayOn) drawOverlay();                                              // range+bearing overlay, over the grid, unclipped
     if(pass!=='labels'){                                                        // boundary + origin ride with the lines
       if(G.showBoundary){ let dc=P.drawingContext, col=rgba(G.boundaryColor,G.boundaryOpacity), lw=Math.max(1.5,G.weight*1.5);
         if(G.type==='iso') drawProjBoundary(rbEdge(), col, lw); else { let o=S(0,0); dc.strokeStyle=col; dc.lineWidth=lw; boundaryPath(dc,o, rbEdge()*_z); dc.stroke(); } }
@@ -809,13 +823,14 @@ const GRID = (function(){
       let rel=((th-a0)%360+360)%360, sc=G.spokeCount|0, wedge=sc>0?Math.floor(rel/(360/sc)):0, bearing=((th+90)%360+360)%360;
       let sect=sc>0?' '+String.fromCharCode(65+(wedge%26)):'', ang=G.radialMode==='degrees'?(Math.round(rel)+'°'):(('00'+Math.round(bearing)).slice(-3));
       return 'R'+ring+sect+' · r'+Math.round(r)+' · '+ang; }
+    let ov=G.overlayOn?(' · r'+Math.round(Math.hypot(wx,wy))+' · '+('00'+Math.round(((Math.atan2(wy,wx)*180/Math.PI+90)%360+360)%360)).slice(-3)):'';   // D overlay: range + N-up compass bearing appended to a non-polar address
     if(G.type==='hex'){ let s=G.hexSize, q, rr; if(G.hexFlat){ q=(2/3)*(wx/s); rr=(wy/(s*Math.sqrt(3)))-q/2; } else { rr=(2/3)*(wy/s); q=(wx/(s*Math.sqrt(3)))-rr/2; }
-      let h=axialRound(q,rr); return h.q+','+h.r; }
+      let h=axialRound(q,rr); return h.q+','+h.r+ov; }
     let sp=G.sqSpacing, kMin=Math.ceil(-RAD()/sp), maxIdx=Math.floor(RAD()/sp-0.5)-kMin, cRaw=Math.floor(wx/sp)-kMin, rRaw=Math.floor(wy/sp)-kMin;
-    if(G.sqLabelMode==='world') return 'x'+Math.round(wx)+' y'+Math.round(dispY(wy));
-    if(cRaw<0||cRaw>maxIdx||rRaw<0||rRaw>maxIdx) return 'out';
+    if(G.sqLabelMode==='world') return 'x'+Math.round(wx)+' y'+Math.round(dispY(wy))+ov;
+    if(cRaw<0||cRaw>maxIdx||rRaw<0||rRaw>maxIdx) return 'out'+ov;
     let col=G.invertX?maxIdx-cRaw:cRaw, row=G.invertY?maxIdx-rRaw:rRaw;
-    return (G.sqLabelMode==='index'||G.sqLabelMode==='line')?('('+col+','+row+')'):(colLetter(col)+(row+1)); }
+    return ((G.sqLabelMode==='index'||G.sqLabelMode==='line')?('('+col+','+row+')'):(colLetter(col)+(row+1)))+ov; }
   function coFields(sx,sy,wx,wy){ let out=[];
     if(G.coPixel) out.push('px  '+Math.round(sx)+', '+Math.round(sy));
     if(G.coPct){ let px=(sx-PANELW)/Math.max(1,width-PANELW)*100, py=(sy-31)/Math.max(1,height-31)*100; out.push('%   '+px.toFixed(1)+', '+py.toFixed(1)); }
@@ -1484,6 +1499,7 @@ const GRID_SCHEMA = [
   ['Isometric', [['isoRot','Yaw / spin','range',0,360,5],['isoPitch','Pitch (squash)','range',0.2,1.4,0.05],['sqSpacing','Floor spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1]]],
   ['Labels', [['labels','Labels','bool'],['radialMode','Radial labels','select',[['letters','Letters (A,B,C)'],['degrees','Degrees'],['magnetic','Magnetic radials']]],['labelColor','Color','color'],['labelSize','Size','range',8,20,1]]],
   ['Label placement', [['labelPos','Cell anchor','select',[['center','Center'],['top','Top'],['bottom','Bottom'],['left','Left'],['right','Right'],['tl','Top-left'],['tr','Top-right'],['bl','Bottom-left'],['br','Bottom-right']]],['labelOffX','Offset X','range',-30,30,1],['labelOffY','Offset Y','range',-30,30,1],['polarZero','Polar 0° at','select',[['east','East →'],['north','North ↑'],['west','West ←'],['south','South ↓']]],['polarLabelAt','Polar labels','select',[['line','On spoke line'],['mid','Wedge midpoint']]]]],
+  ['Range + bearing overlay', [['overlayOn','Overlay','bool'],['overlayStep','Ring spacing','range',50,1000,10],['overlaySpokes','Bearing spokes','range',0,24,1],['overlayColor','Color','color'],['overlayOpacity','Opacity','range',0,1,0.01],['overlayLabels','Labels','bool']]],
   ['Coordinates readout', [['coMouse','Mouse','bool'],['coWaypoint','Waypoint','bool'],['coSystem','System','bool'],['coPixel','Show pixels','bool'],['coPct','Show %','bool'],['coWorld','Show world','bool'],['coDatum','World datum','select',[['grid','Grid frame'],['gen','Generation (x,y)']]],['coYup','Y-up world','bool'],['coRelative','Relative','bool'],['coRelFrom','Measure from','select',[['wp','Waypoint'],['sys','System'],['mouse','Mouse']]]]],
   ['Bake (performance)', [['bakeOn','Bake grid','bool'],['bakeMode','Mode','select',[['cache','A · cache (idle)'],['map','B · map (pan-free, crisp)']]],['bakeLabels','Bake labels too','bool']]]
 ];
