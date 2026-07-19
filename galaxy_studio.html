@@ -65,7 +65,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260719';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '01';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '02';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -84,7 +84,7 @@ let CFG = {
     // STREAMERS
     streamersOn: true, streamersOpacity: 0.5, streamerCount: 14, streamerLen: 3.4,
     // BLOOM (diffraction)
-    bloomOn: true, bloomOpacity: 0.9, bloomLen: 4.5, bloomThick: 0.14, bloomAngle: 0, bloomGlow: false, bloomRandom: true, bloomLockAngle: true, bloomLockRot: true,
+    bloomOn: true, bloomOpacity: 0.9, bloomLen: 4.5, bloomThick: 0.14, bloomAngle: 0, bloomGlow: false, bloomRandom: true, bloomVaryRate: false, bloomLockAngle: true, bloomLockRot: true,
     // CHROMOSPHERE RIM
     rimOn: false, rimOpacity: 0.6, rimThick: 0.06,
     // PROMINENCE
@@ -1300,7 +1300,9 @@ function fx_bloom(P,r,R,t,lod,seed){
     g.addColorStop(0,rgba([255,250,235],0.9*w)); g.addColorStop(0.4,rgba(R,0.4*w)); g.addColorStop(1,rgba(R,0));
     P.drawingContext.fillStyle=g; P.circle(0,0,r*5.2);
   }
-  let lenMult = rnd ? (2.0 + 2.0*sin(lenPh + t*growR*0.01)) : OPTS.bloomLen;   // oscillates 0..4 at growR (rate 0 = static random len)
+  let lenMult;
+  if(rnd && OPTS.bloomVaryRate){ let nz=noise(sd*0.53+11.0, t*(0.3+growR)*0.005); lenMult = constrain(2.0 + 5.0*(nz-0.5), 0, 4.5); }   // rate wanders (noise-driven, non-repeating) instead of a fixed per-star sine
+  else lenMult = rnd ? (2.0 + 2.0*sin(lenPh + t*growR*0.01)) : OPTS.bloomLen;   // oscillates 0..4 at growR (rate 0 = static random len)
   let L=r*lenMult, tw=r*OPTS.bloomThick, pulse=0.85+0.15*sin(t*0.05*spd + lenPh);
   for(let s=0;s<2;s++){ P.push(); P.rotate(s*HALF_PI);
     let lg=P.drawingContext.createLinearGradient(-L,0,L,0);
@@ -1358,7 +1360,7 @@ const SUN_SCHEMA = [
   ['Streamers', [['streamersOn','Streamers','bool'],['streamersOpacity','Opacity','range',0,1,0.01],
     ['streamerCount','Count','range',3,30,1],['streamerLen','Length','range',1,6,0.1]]],
   ['Bloom (diffraction)', [['bloomOn','Bloom','bool'],['bloomOpacity','Opacity','range',0,1,0.01],
-    ['bloomLen','Spike length','range',1,10,0.1],['bloomThick','Spike thick','range',0.02,0.5,0.01],['bloomGlow','Center glow','bool'],['bloomAngle','Angle','range',0,1,0.01],['bloomRandom','Randomize/star','bool'],['bloomLockAngle','Lock angle','bool'],['bloomLockRot','Lock rotation','bool']]],
+    ['bloomLen','Spike length','range',1,10,0.1],['bloomThick','Spike thick','range',0.02,0.5,0.01],['bloomGlow','Center glow','bool'],['bloomAngle','Angle','range',0,1,0.01],['bloomRandom','Randomize/star','bool'],['bloomVaryRate','Vary rate','bool'],['bloomLockAngle','Lock angle','bool'],['bloomLockRot','Lock rotation','bool']]],
   ['Chromosphere rim', [['rimOn','Rim','bool'],['rimOpacity','Opacity','range',0,1,0.01],['rimThick','Thickness','range',0.01,0.2,0.005]]],
   ['Prominence', [['promOn','Prominence','bool'],['promOpacity','Opacity','range',0,1,0.01],['promCount','Count','range',1,12,1],['promHeight','Height','range',1,2.5,0.05]]],
   ['Embers', [['embersOn','Embers','bool'],['embersOpacity','Opacity','range',0,1,0.01],['embersCount','Count','range',10,200,5]]],
