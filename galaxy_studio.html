@@ -64,7 +64,7 @@
 // ===================================================================
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
-const BUILD_DATE = '20260718';     // build day — reset SEQ to '01' on a new day
+const BUILD_DATE = '20260719';     // build day — reset SEQ to '01' on a new day
 const BUILD_SEQ  = '01';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
@@ -165,7 +165,9 @@ let CFG = {
     isoRot:0, isoPitch:1,
     labels:true, labelColor:[150,200,235], labelSize:11, radialMode:'letters',
     labelPos:'center', labelOffX:0, labelOffY:0,
-    polarZero:'east', polarLabelAt:'line'
+    polarZero:'east', polarLabelAt:'line',
+    coMouse:true, coWaypoint:false, coSystem:false, coPixel:false, coPct:false, coWorld:true,   // coordinate readout: targets + fields
+    coDatum:'grid', coYup:false, coRelative:false, coRelFrom:'wp'                                // world datum (grid|gen) · Y-up flip · relative range/bearing from a reference marker
   },
   economy: {}   // filled in later phases
 };
@@ -628,6 +630,7 @@ const GRID_OPT_TYPE=[['square','Square (Cartesian)'],['polar','Polar (rings + sp
 const GRID_OPT_STYLE=[['solid','Solid'],['dashed','Dashed'],['dotted','Dotted'],['dashdot','Dash-dot']];
 const GRID = (function(){
   let G, _cx=0,_cy=0,_z=1,_px=0,_py=0;                                          // cam + projection state, set per draw()
+  let coWp=null, coSelSys=null, coSelSysId=-1;                                  // readout state: waypoint + hovered system
   const ISO_COS=Math.cos(Math.PI/6), ISO_SIN=Math.sin(Math.PI/6);
   const LABEL_POS={ center:[0.5,0.5,'c','c',0,0], top:[0.5,0,'c','t',0,3], bottom:[0.5,1,'c','b',0,-3], left:[0,0.5,'l','c',3,0], right:[1,0.5,'r','c',-3,0], tl:[0,0,'l','t',3,3], tr:[1,0,'r','t',-3,3], bl:[0,1,'l','b',3,-3], br:[1,1,'r','b',-3,-3] };
   const POLAR_ZERO={ east:0, north:-90, west:180, south:90 };
@@ -756,7 +759,69 @@ const GRID = (function(){
       dc.fillStyle=oc; dc.beginPath(); dc.arc(o.x,o.y,2.5,0,Math.PI*2); dc.fill(); }
     pop();
   }
-  return { draw };
+  // ---- coordinates readout (ported from grid_exhibit): a measurement HUD over the frame ----
+  function s2w(sx,sy){ let z=_z;                                                 // screen -> world (inverse of the active projection)
+    if(G.type==='iso'){ let ix=(sx-_px)/z-_cx, iy=(sy-_py)/z-_cy, A=ix/ISO_COS, B=iy/(ISO_SIN*G.isoPitch), rx=(A+B)/2, ry=(B-A)/2, a=G.isoRot*Math.PI/180;
+      return { x: rx*Math.cos(a)+ry*Math.sin(a), y: -rx*Math.sin(a)+ry*Math.cos(a) }; }
+    return { x:(sx-_px)/z-_cx, y:(sy-_py)/z-_cy }; }
+  function axialRound(q,r){ let x=q, z=r, y=-x-z, rx=Math.round(x), ry=Math.round(y), rz=Math.round(z);   // cube rounding -> nearest hex
+    let dx=Math.abs(rx-x), dy=Math.abs(ry-y), dz=Math.abs(rz-z);
+    if(dx>dy && dx>dz) rx=-ry-rz; else if(dy>dz) ry=-rx-rz; else rz=-rx-ry; return { q:rx, r:rz }; }
+  function dispY(wy){ return G.coYup ? -wy : wy; }                              // presentation flip: +Y = up/north (internal world stays Y-down)
+  function genCoordStr(wx,wy){ return 'x'+Math.round(wx)+' y'+Math.round(dispY(wy))+' r'+Math.round(Math.hypot(wx,wy)); }
+  function gridCoordStr(wx,wy){
+    if(G.type==='polar'){ let r=Math.hypot(wx,wy), ring=Math.floor(r/G.ringSpacing)+1, a0=(POLAR_ZERO[G.polarZero]||0)+G.angleOffset, th=Math.atan2(wy,wx)*180/Math.PI;
+      let rel=((th-a0)%360+360)%360, sc=G.spokeCount|0, wedge=sc>0?Math.floor(rel/(360/sc)):0, bearing=((th+90)%360+360)%360;
+      let sect=sc>0?' '+String.fromCharCode(65+(wedge%26)):'', ang=G.radialMode==='degrees'?(Math.round(rel)+'°'):(('00'+Math.round(bearing)).slice(-3));
+      return 'R'+ring+sect+' · r'+Math.round(r)+' · '+ang; }
+    if(G.type==='hex'){ let s=G.hexSize, q, rr; if(G.hexFlat){ q=(2/3)*(wx/s); rr=(wy/(s*Math.sqrt(3)))-q/2; } else { rr=(2/3)*(wy/s); q=(wx/(s*Math.sqrt(3)))-rr/2; }
+      let h=axialRound(q,rr); return h.q+','+h.r; }
+    let sp=G.sqSpacing, kMin=Math.ceil(-RAD()/sp), maxIdx=Math.floor(RAD()/sp-0.5)-kMin, cRaw=Math.floor(wx/sp)-kMin, rRaw=Math.floor(wy/sp)-kMin;
+    if(G.sqLabelMode==='world') return 'x'+Math.round(wx)+' y'+Math.round(dispY(wy));
+    if(cRaw<0||cRaw>maxIdx||rRaw<0||rRaw>maxIdx) return 'out';
+    let col=G.invertX?maxIdx-cRaw:cRaw, row=G.invertY?maxIdx-rRaw:rRaw;
+    return (G.sqLabelMode==='index'||G.sqLabelMode==='line')?('('+col+','+row+')'):(colLetter(col)+(row+1)); }
+  function coFields(sx,sy,wx,wy){ let out=[];
+    if(G.coPixel) out.push('px  '+Math.round(sx)+', '+Math.round(sy));
+    if(G.coPct){ let px=(sx-PANELW)/Math.max(1,width-PANELW)*100, py=(sy-31)/Math.max(1,height-31)*100; out.push('%   '+px.toFixed(1)+', '+py.toFixed(1)); }
+    if(G.coWorld) out.push((G.coDatum==='gen'?'gen ':'grid ')+(G.coDatum==='gen'?genCoordStr(wx,wy):gridCoordStr(wx,wy)));
+    return out; }
+  function drawWaypoint(px,py){ let dc=drawingContext; dc.strokeStyle='rgba(120,255,180,0.95)'; dc.fillStyle='rgba(120,255,180,0.22)'; dc.lineWidth=1.5; dc.setLineDash([]);
+    dc.beginPath(); dc.moveTo(px,py-8); dc.lineTo(px+8,py); dc.lineTo(px,py+8); dc.lineTo(px-8,py); dc.closePath(); dc.fill(); dc.stroke();
+    dc.beginPath(); dc.moveTo(px-12,py); dc.lineTo(px+12,py); dc.moveTo(px,py-12); dc.lineTo(px,py+12); dc.stroke(); }
+  function drawReadout(blocks){ let dc=drawingContext; textSize(11); textAlign(LEFT,TOP);
+    let lines=[]; for(const b of blocks){ lines.push({s:b.t,hd:true}); for(const f of b.f) lines.push({s:f,hd:false}); }
+    let pad=8, lh=15, w=118; for(const l of lines) w=Math.max(w, textWidth(l.s)); w+=pad*2;
+    let h=lines.length*lh+pad*2, x=width-w-8, y=31+8;
+    dc.setLineDash([]); dc.fillStyle='rgba(6,14,22,0.88)'; dc.strokeStyle='rgba(90,160,180,0.6)'; dc.lineWidth=1; dc.beginPath(); dc.rect(x,y,w,h); dc.fill(); dc.stroke();
+    let ty=y+pad; for(const l of lines){ noStroke(); fill(l.hd?'#8fe0f0':'#c8e8f0'); textStyle(l.hd?BOLD:NORMAL); text(l.s, x+pad, ty); ty+=lh; } textStyle(NORMAL); }
+  const REF_LBL={wp:'WP', sys:'SYS', mouse:'MOU'};
+  function refPos(key){
+    if(key==='wp')  return (G.coWaypoint && coWp) ? {x:coWp.x, y:coWp.y} : null;
+    if(key==='sys') return (G.coSystem && coSelSys) ? {x:coSelSys.x, y:coSelSys.y} : null;
+    if(key==='mouse' && G.coMouse && mouseX>PANELW && mouseY>31){ let w=s2w(mouseX,mouseY); return {x:w.x, y:w.y}; }
+    return null; }
+  function readout(camX,camY,camZoom){
+    G=CFG.grid; setCam(camX,camY,camZoom);
+    push(); blendMode(BLEND); let dc=drawingContext; dc.setLineDash([]);
+    if(G.coSystem){ if(mouseX>PANELW && mouseY>31){ let best=400, sel=null, idx=-1; for(let i=0;i<galaxy.length;i++){ let s=galaxy[i], p=proj(s.x,s.y), dx=p.x-mouseX, dy=p.y-mouseY, d=dx*dx+dy*dy; if(d<best){ best=d; sel=s; idx=i; } } coSelSys=sel; coSelSysId=idx; } } else coSelSys=null;
+    if(G.coWaypoint && !coWp) coWp={ x:-_cx, y:-_cy };                            // first enable: drop at the view centre; click to move
+    if(G.coWaypoint && coWp){ let p=proj(coWp.x,coWp.y); drawWaypoint(p.x,p.y); }
+    if(G.coSystem && coSelSys){ let p=proj(coSelSys.x,coSelSys.y); dc.strokeStyle='rgba(255,220,120,0.95)'; dc.lineWidth=1.5; dc.beginPath(); dc.arc(p.x,p.y,9,0,Math.PI*2); dc.stroke(); }
+    let T={};
+    if(G.coMouse && mouseX>PANELW && mouseY>31){ let w=s2w(mouseX,mouseY); T.mouse={t:'MOUSE', wx:w.x, wy:w.y, sx:mouseX, sy:mouseY}; }
+    if(G.coWaypoint && coWp){ let p=proj(coWp.x,coWp.y); T.wp={t:'WAYPOINT', wx:coWp.x, wy:coWp.y, sx:p.x, sy:p.y}; }
+    if(G.coSystem && coSelSys){ let p=proj(coSelSys.x,coSelSys.y); T.sys={t:'SYS #'+coSelSysId, wx:coSelSys.x, wy:coSelSys.y, sx:p.x, sy:p.y}; }
+    let ref = G.coRelative ? refPos(G.coRelFrom) : null, refS = ref ? proj(ref.x,ref.y) : null;
+    let blocks=[];
+    for(const k of ['mouse','wp','sys']){ let e=T[k]; if(!e) continue; let f=coFields(e.sx,e.sy,e.wx,e.wy);
+      if(ref && k!==G.coRelFrom){ let dx=e.wx-ref.x, dy=e.wy-ref.y, rng=Math.hypot(dx,dy), brg=((Math.atan2(dy,dx)*180/Math.PI+90)%360+360)%360;
+        f.push('fr'+REF_LBL[G.coRelFrom]+' r'+Math.round(rng)+' · '+('00'+Math.round(brg)).slice(-3));
+        dc.strokeStyle='rgba(255,205,120,0.55)'; dc.lineWidth=1; dc.setLineDash([4,4]); dc.beginPath(); dc.moveTo(refS.x,refS.y); dc.lineTo(e.sx,e.sy); dc.stroke(); dc.setLineDash([]); }
+      blocks.push({t:e.t, f:f}); }
+    if(blocks.length) drawReadout(blocks); pop(); }
+  function dropWaypoint(sx,sy){ G=CFG.grid; if(!G.coWaypoint) return; let w=s2w(sx,sy); coWp={x:w.x,y:w.y}; }
+  return { draw, readout, dropWaypoint };
 })();
 function drawGridPreview(){
   background(4,5,9);
@@ -765,6 +830,7 @@ function drawGridPreview(){
   let fit=Math.min(playW,height)*0.85/(2*Math.max(1,E));
   noStroke(); for(const s of galaxy){ let x=px+s.x*fit, y=py+s.y*fit; fill(150,165,200,70); circle(x,y,2.2); }   // faint galaxy systems for scale/context
   GRID.draw(0,0,fit,true);                                                       // force-draw even if 'off', so you can tune it here
+  if(CFG.grid.coMouse||CFG.grid.coWaypoint||CFG.grid.coSystem) GRID.readout(0,0,fit);   // readout over the preview (same fit camera)
   blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER,BOTTOM);
   text('grid preview · '+CFG.grid.type+' · boundary = galaxy radius '+CFG.gen.radius+(CFG.grid.on?'':' · (off in galaxy view)')+' · overlays the galaxy in VIEW GALAXY', px, height-16);
 }
@@ -795,6 +861,7 @@ function drawGalaxyView(){
   }
   pop();
   if(CFG.grid.on && CFG.grid.gridZ==='over') GRID.draw();   // coordinate grid as a HUD overlay on top of the galaxy
+  if(CFG.grid.on && (CFG.grid.coMouse||CFG.grid.coWaypoint||CFG.grid.coSystem)) GRID.readout();   // coordinate readout HUD (always on top)
   if(!fullscreen){ blendMode(BLEND); noStroke(); textAlign(LEFT, TOP); fill(120,140,175); textSize(11);
     text(galaxy.length+' stars · '+drawn+' drawn · '+(baked?('BAKED'+(liveOverlay?'+live':'')):'live')+' · '+sunSpriteCache.size+' sprites · zoom '+cam.zoom.toFixed(2)+'   [drag/wheel]', PANELW+12, 40); }
 }
@@ -1036,9 +1103,14 @@ function drawBackdrop(parallax){                                              //
 }
 function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); invalidateLanes(); invalidateTraffic(); }   // radius change -> extent change -> re-bake + relink
 function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); regenerate(); }
-function mousePressed(){ if(viewMode==='galaxy'||activePage!=='traffic'||trafEditIdx==null||mouseX<=PANELW) return;   // edit-grid cell click -> pick a style
+let gPressPt=null;   // grid-waypoint click-vs-drag tracking
+function mousePressed(){ gPressPt={x:mouseX,y:mouseY};
+  if(viewMode==='galaxy'||activePage!=='traffic'||trafEditIdx==null||mouseX<=PANELW) return;   // edit-grid cell click -> pick a style
   let L=CFG.traffic.layers[trafEditIdx]; if(!L) return;
   for(const cell of trafEditCells()){ if(mouseX>=cell.x&&mouseX<=cell.x+cell.w&&mouseY>=cell.y&&mouseY<=cell.y+cell.h){ if(L.style!==cell.style){ L.style=cell.style; showPage(); } return; } } }
+function mouseReleased(){   // a click (not a drag) drops the grid waypoint — active in galaxy view (grid on) or the Grid preview
+  if(gPressPt && CFG.grid.coWaypoint && mouseX>PANELW && Math.hypot(mouseX-gPressPt.x,mouseY-gPressPt.y)<5 && (activePage==='grid' || (viewMode==='galaxy' && CFG.grid.on))) GRID.dropWaypoint(mouseX,mouseY);
+  gPressPt=null; }
 function mouseDragged(){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; lastInteract=millis(); } }
 function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); lastInteract=millis(); return false; } }
 function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); }
@@ -1374,7 +1446,8 @@ const GRID_SCHEMA = [
   ['Hex', [['hexSize','Hex size','range',30,400,5],['hexFlat','Flat-top','bool']]],
   ['Isometric', [['isoRot','Yaw / spin','range',0,360,5],['isoPitch','Pitch (squash)','range',0.2,1.4,0.05],['sqSpacing','Floor spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1]]],
   ['Labels', [['labels','Labels','bool'],['radialMode','Radial labels','select',[['letters','Letters (A,B,C)'],['degrees','Degrees'],['magnetic','Magnetic radials']]],['labelColor','Color','color'],['labelSize','Size','range',8,20,1]]],
-  ['Label placement', [['labelPos','Cell anchor','select',[['center','Center'],['top','Top'],['bottom','Bottom'],['left','Left'],['right','Right'],['tl','Top-left'],['tr','Top-right'],['bl','Bottom-left'],['br','Bottom-right']]],['labelOffX','Offset X','range',-30,30,1],['labelOffY','Offset Y','range',-30,30,1],['polarZero','Polar 0° at','select',[['east','East →'],['north','North ↑'],['west','West ←'],['south','South ↓']]],['polarLabelAt','Polar labels','select',[['line','On spoke line'],['mid','Wedge midpoint']]]]]
+  ['Label placement', [['labelPos','Cell anchor','select',[['center','Center'],['top','Top'],['bottom','Bottom'],['left','Left'],['right','Right'],['tl','Top-left'],['tr','Top-right'],['bl','Bottom-left'],['br','Bottom-right']]],['labelOffX','Offset X','range',-30,30,1],['labelOffY','Offset Y','range',-30,30,1],['polarZero','Polar 0° at','select',[['east','East →'],['north','North ↑'],['west','West ←'],['south','South ↓']]],['polarLabelAt','Polar labels','select',[['line','On spoke line'],['mid','Wedge midpoint']]]]],
+  ['Coordinates readout', [['coMouse','Mouse','bool'],['coWaypoint','Waypoint','bool'],['coSystem','System','bool'],['coPixel','Show pixels','bool'],['coPct','Show %','bool'],['coWorld','Show world','bool'],['coDatum','World datum','select',[['grid','Grid frame'],['gen','Generation (x,y)']]],['coYup','Y-up world','bool'],['coRelative','Relative','bool'],['coRelFrom','Measure from','select',[['wp','Waypoint'],['sys','System'],['mouse','Mouse']]]]]
 ];
 const GRID_PRESETS = {
   blueprint:{name:'Blueprint (square)', ov:{type:'square',color:[70,140,210],opacity:0.45,weight:1,sqSpacing:150,sqMajor:5,labels:true,showBoundary:true,boundaryColor:[120,200,255]}},
