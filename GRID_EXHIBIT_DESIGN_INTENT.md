@@ -180,9 +180,13 @@ field. Not the real generator.
 - **Which family is canonical?** Square is the front-runner for sector naming; polar may
   win for "distance from core" gameplay. Possibly both (square for addressing, polar for
   a secondary readout).
-- **How `galaxy_studio` consumes it.** The end state: Map-track effects and system
-  positions read from this coordinate system instead of the `gen.radius` stand-in. Needs
-  a shared definition both files import.
+- **How `galaxy_studio` consumes it.** *Partly answered:* the engine is now **ported into
+  `galaxy_studio` as the Grid tab** (`CFG.grid`, build `20260718.01`) — boundary radius =
+  `gen.radius`, projected through the galaxy camera, replacing the old baked backdrop grid
+  overlay. Still open: (a) the fade/nebula/image **Map** track anchors to `gen.radius`
+  independently — it could instead read the grid's boundary (shape / inset); (b) system
+  positions still don't reference sector coordinates; (c) the exhibit and the studio Grid
+  tab are currently a **fork** of the same code, not a shared module.
 - **Sector naming scheme.** A1 letters vs numeric `(col,row)` vs polar wedges — tied to
   the family decision above.
 - **Sub-sector addressing.** If subdivisions become meaningful (not just visual), how a

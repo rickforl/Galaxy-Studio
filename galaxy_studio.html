@@ -64,8 +64,8 @@
 // ===================================================================
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
-const BUILD_DATE = '20260717';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '49';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_DATE = '20260718';     // build day — reset SEQ to '01' on a new day
+const BUILD_SEQ  = '01';           // per-day build sequencer — bump each build (01, 02, 03, ...)
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -106,15 +106,13 @@ let CFG = {
     nebOn: true, nebTrack: 'viewport', nebType: 'domainwarp', nebColorA: [40, 30, 90], nebColorB: [120, 40, 110], nebColorC: [245, 215, 185],
     nebScale: 1.0, nebOctaves: 5, nebWarp: 1.2, nebContrast: 1.4, nebThreshold: 0.15, nebOpacity: 1.2, nebCount: 42, nebSeed: 7,
     nebAnimOn: true, nebInterval: 5, nebStep: 0.05, nebBlend: 1.5,             // hold N s, then crossfade one step over nebBlend s
-    // GRID OVERLAY
-    gridOn: false, gridColor: [60, 90, 140], gridOpacity: 0.25, gridSpacing: 200, gridWeight: 1,
     // RADIAL FADE (vignette — hides image/nebula edge cutoff)
     fadeOn: true, fadeTrack: 'viewport', fadeColor: [4, 5, 9], fadeInner: 0.55, fadeOuter: 1.0, fadeOpacity: 1.0, fadeCurve: 1.0, fadeShape: 1.0,
     fade2On: false, fade2Track: 'viewport', fade2Color: [4, 5, 9], fade2Inner: 0.8, fade2Outer: 1.35, fade2Opacity: 1.0, fade2Curve: 1.0, fade2Shape: 1.0,   // radial fade 2 (stacks on top of fade 1)  // fadeTrack: viewport (screen vignette) | map (anchored to galaxy origin+radius, so it zooms+pans with the map — stand-in for the coordinate system); curve = softness; shape = circle..ellipse
     // PARALLAX (galaxy view) — 1 = locked to the galaxy; lower = farther depth (pans/zooms less), matching the star layers
-    baseParallax: 1, imgParallax: 1, nebParallax: 1, gridParallax: 1, fadeParallax: 1,
+    baseParallax: 1, imgParallax: 1, nebParallax: 1, fadeParallax: 1,
     // BAKE INCLUDES — which layers go into the baked backdrop buffer (unchecked = drawn live)
-    bake_base: true, bake_img: true, bake_neb: true, bake_grid: false, bake_fade: true
+    bake_base: true, bake_img: true, bake_neb: true, bake_fade: true
   },
   stars: {                                             // layered background starfield (behind the galaxy systems)
     twSpeed: 1.0,
@@ -154,6 +152,20 @@ let CFG = {
       { name:'Transport',  on:true, kind:'trans',    style:'orbs',     count:3, speed:0.7, size:1.2, colorMode:'lanematch', color:[255,180,80],  dir:'dual2',  gap:5, fade:0.12, minDist:300, maxDist:650, links:1, seed:33 },
       { name:'Smugglers',  on:true, kind:'smuggler', style:'civilian', count:1, speed:0.6, size:0.9, colorMode:'multi',     color:[200,160,255], dir:'single1', gap:0, fade:0.15, minDist:320, maxDist:680, links:1, seed:44 }
     ]
+  },
+  grid: {                                              // coordinate grid overlay (ported from grid_exhibit); boundary radius = gen.radius
+    on:true, type:'square', gridZ:'over',              // gridZ: over (HUD overlay) | under (floor the galaxy sits on)
+    color:[70,140,210], opacity:0.5, weight:1, majorStyle:'solid', minorStyle:'solid', dashScale:1,
+    minorColor:[70,140,210], minorBright:1, minorOpacity:0.35,
+    showBoundary:true, boundaryShape:'circle', boundaryPad:0, gridInset:0, labelRingPad:0, boundaryColor:[110,200,255], boundaryOpacity:0.85, showOrigin:true, clip:false,
+    sqSpacing:150, sqMajor:5, sqSubdiv:1, sqLabelMode:'coord', invertX:false, invertY:false,
+    lineNumMajor:true, lineNumMinor:false, edgeLabels:false,
+    ringSpacing:150, spokeCount:12, angleOffset:0,
+    hexSize:110, hexFlat:false,
+    isoRot:0, isoPitch:1,
+    labels:true, labelColor:[150,200,235], labelSize:11, radialMode:'letters',
+    labelPos:'center', labelOffX:0, labelOffY:0,
+    polarZero:'east', polarLabelAt:'line'
   },
   economy: {}   // filled in later phases
 };
@@ -212,6 +224,7 @@ function draw(){
   else if (activePage === 'backdrop') drawBackdropPreview();   // isolated backdrop compilation (no sun/stars)
   else if (activePage === 'stars') drawStarsPreview();         // isolated starfield compilation
   else if (activePage === 'lanes') drawLanesPreview();         // isolated lane network (nodes + beams, fit)
+  else if (activePage === 'grid') drawGridPreview();           // isolated coordinate grid (fit to galaxy radius)
   else if (activePage === 'traffic') { if(trafEditIdx!=null) drawTrafficEditGrid(trafEditIdx); else drawTrafficPreview(); }   // edit grid, or isolated traffic
   else drawSunPreview();
   if(fullscreen && infoOverlay){                                              // subtle build + fps pill, bottom-left
@@ -610,10 +623,156 @@ function drawTrafficPreview(){
   let nL=TC.layers.filter(l=>l.on).length;
   text('traffic preview · '+nL+' of '+TC.layers.length+' layers · lanes + ships · full context in VIEW GALAXY', px, height-16);
 }
+// ---------- Grid: the galaxy's coordinate frame (ported from grid_exhibit; boundary radius = CFG.gen.radius) ----------
+const GRID_OPT_TYPE=[['square','Square (Cartesian)'],['polar','Polar (rings + spokes)'],['hex','Hex tiles'],['iso','Isometric (3D floor)']];
+const GRID_OPT_STYLE=[['solid','Solid'],['dashed','Dashed'],['dotted','Dotted'],['dashdot','Dash-dot']];
+const GRID = (function(){
+  let G, _cx=0,_cy=0,_z=1,_px=0,_py=0;                                          // cam + projection state, set per draw()
+  const ISO_COS=Math.cos(Math.PI/6), ISO_SIN=Math.sin(Math.PI/6);
+  const LABEL_POS={ center:[0.5,0.5,'c','c',0,0], top:[0.5,0,'c','t',0,3], bottom:[0.5,1,'c','b',0,-3], left:[0,0.5,'l','c',3,0], right:[1,0.5,'r','c',-3,0], tl:[0,0,'l','t',3,3], tr:[1,0,'r','t',-3,3], bl:[0,1,'l','b',3,-3], br:[1,1,'r','b',-3,-3] };
+  const POLAR_ZERO={ east:0, north:-90, west:180, south:90 };
+  function setCam(camX,camY,camZoom){ _cx=(camX!==undefined)?camX:cam.x; _cy=(camY!==undefined)?camY:cam.y; _z=(camZoom!==undefined)?camZoom:cam.zoom; _px=(PANELW+width)/2; _py=height/2; }
+  function S(wx,wy){ return { x:_px+(_cx+wx)*_z, y:_py+(_cy+wy)*_z }; }            // world -> screen (same projection as the galaxy view)
+  function VIS(){ return { x0:(PANELW-_px)/_z-_cx, x1:(width-_px)/_z-_cx, y0:(0-_py)/_z-_cy, y1:(height-_py)/_z-_cy }; }
+  function RAD(){ return CFG.gen.radius; }                                       // grid coordinate radius = the galaxy radius
+  function iso2s(wx,wy,wz){ let a=G.isoRot*Math.PI/180, rx=wx*Math.cos(a)-wy*Math.sin(a), ry=wx*Math.sin(a)+wy*Math.cos(a);
+    let ix=(rx-ry)*ISO_COS, iy=(rx+ry)*ISO_SIN*G.isoPitch-(wz||0);
+    return { x:_px+(_cx+ix)*_z, y:_py+(_cy+iy)*_z }; }
+  function proj(wx,wy){ return G.type==='iso' ? iso2s(wx,wy,0) : S(wx,wy); }
+  function drawProjBoundary(r,colStr,lw){ let dc=drawingContext; dc.strokeStyle=colStr; dc.lineWidth=lw; dc.beginPath();
+    if(G.boundaryShape==='square'){ let p=[[-r,-r],[r,-r],[r,r],[-r,r]]; for(let i=0;i<4;i++){ let s=iso2s(p[i][0],p[i][1],0); i?dc.lineTo(s.x,s.y):dc.moveTo(s.x,s.y); } dc.closePath(); }
+    else { for(let i=0;i<=64;i++){ let ang=i/64*Math.PI*2, s=iso2s(Math.cos(ang)*r,Math.sin(ang)*r,0); i?dc.lineTo(s.x,s.y):dc.moveTo(s.x,s.y); } }
+    dc.stroke(); }
+  function brightRGB(c,f){ return [Math.min(255,c[0]*f), Math.min(255,c[1]*f), Math.min(255,c[2]*f)]; }
+  function colLetter(n){ let s=''; n=n|0; do{ s=String.fromCharCode(65+(n%26))+s; n=Math.floor(n/26)-1; }while(n>=0); return s; }
+  function seg(ax,ay,bx,by,col,w){ let a=S(ax,ay), b=S(bx,by), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
+  function circ(r,col,w){ let o=S(0,0), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.arc(o.x,o.y, r*_z, 0, Math.PI*2); dc.stroke(); }
+  function lbl(txt,wx,wy,dx,dy){ let s=S(wx,wy); noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); text(txt, s.x+dx+G.labelOffX, s.y+dy+G.labelOffY); }
+  function alignFrom(h,v){ textAlign(h==='l'?LEFT:h==='r'?RIGHT:CENTER, v==='t'?TOP:v==='b'?BOTTOM:CENTER); }
+  function rbEdge(){ return Math.max(1, RAD() + G.boundaryPad); }
+  function rGridExtent(){ return Math.max(1, rbEdge() - G.gridInset); }
+  function insideB(wx,wy,r){ return G.boundaryShape==='square' ? (Math.abs(wx)<=r && Math.abs(wy)<=r) : (Math.hypot(wx,wy)<=r); }
+  function boundaryPath(dc,o,r){ dc.beginPath(); if(G.boundaryShape==='square') dc.rect(o.x-r,o.y-r,r*2,r*2); else dc.arc(o.x,o.y,r,0,Math.PI*2); }
+  function applyLineStyle(style){ let dc=drawingContext, s=G.dashScale||1;
+    switch(style){ case 'dashed': dc.setLineDash([8*s,6*s]); dc.lineCap='butt'; break; case 'dotted': dc.setLineDash([0.1,4*s]); dc.lineCap='round'; break; case 'dashdot': dc.setLineDash([9*s,5*s,0.1,5*s]); dc.lineCap='round'; break; default: dc.setLineDash([]); dc.lineCap='butt'; } }
+  function drawSquare(){
+    let V=VIS(), sp=G.sqSpacing;
+    let n=Math.ceil((V.x1-V.x0)/sp)+Math.ceil((V.y1-V.y0)/sp); if(n>4000) return;
+    let nc=brightRGB(G.minorColor,G.minorBright);
+    let base=rgba(nc,G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9)), axc=rgba(G.color,Math.min(1,G.opacity*2.6)), subc=rgba(nc,G.minorOpacity*0.5);
+    let sub=Math.max(1,Math.round(G.sqSubdiv));
+    if(sub>1 && (sp/sub)*_z>=6){ let step=sp/sub; applyLineStyle(G.minorStyle);
+      for(let i=Math.ceil(V.x0/step); i*step<=V.x1; i++){ if(((i%sub)+sub)%sub===0) continue; seg(i*step,V.y0,i*step,V.y1,subc,G.weight*0.6); }
+      for(let i=Math.ceil(V.y0/step); i*step<=V.y1; i++){ if(((i%sub)+sub)%sub===0) continue; seg(V.x0,i*step,V.x1,i*step,subc,G.weight*0.6); } }
+    for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp), major=(k%G.sqMajor===0), axis=(k===0);
+      applyLineStyle((major||axis)?G.majorStyle:G.minorStyle); seg(wx,V.y0,wx,V.y1, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
+    for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp), major=(k%G.sqMajor===0), axis=(k===0);
+      applyLineStyle((major||axis)?G.majorStyle:G.minorStyle); seg(V.x0,wy,V.x1,wy, axis?axc:(major?majc:base), (axis?G.weight*2:(major?G.weight*1.6:G.weight))); }
+    if(!G.labels) return;
+    if(G.sqLabelMode==='world'){
+      if(G.edgeLabels){ noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); let yB=height-6, xL=PANELW+4;
+        textAlign(CENTER,BOTTOM); for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ if(Math.round(wx/sp)%G.sqMajor) continue; let sx=S(wx,0).x; if(sx>=PANELW&&sx<=width) text((wx|0)+'', sx+G.labelOffX, yB+G.labelOffY); }
+        textAlign(LEFT,CENTER); for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor||k===0) continue; let sy=S(0,wy).y; if(sy>=31&&sy<=height) text((wy|0)+'', xL+G.labelOffX, sy+G.labelOffY); }
+      } else { textAlign(CENTER,TOP); for(let wx=Math.ceil(V.x0/sp)*sp; wx<=V.x1; wx+=sp){ let k=Math.round(wx/sp); if(k%G.sqMajor===0) lbl((wx|0)+'', wx,0,0,4); }
+        textAlign(LEFT,CENTER); for(let wy=Math.ceil(V.y0/sp)*sp; wy<=V.y1; wy+=sp){ let k=Math.round(wy/sp); if(k%G.sqMajor===0&&k!==0) lbl((wy|0)+'', 0,wy,5,0); } }
+    } else if(G.sqLabelMode==='line'){
+      let kMin=Math.ceil(-RAD()/sp), maxL=Math.floor(RAD()/sp)-kMin, zMinor=sp*_z>=22, tierOn=(k)=>(k%G.sqMajor===0)?G.lineNumMajor:(G.lineNumMinor&&zMinor);
+      if(G.edgeLabels){ noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); let yB=height-6, xL=PANELW+4;
+        textAlign(CENTER,BOTTOM); for(let k=Math.ceil(V.x0/sp); k*sp<=V.x1; k++){ let idx=k-kMin; if(idx<0||idx>maxL||!tierOn(k)) continue; let sx=S(k*sp,0).x; if(sx>=PANELW&&sx<=width) text((G.invertX?maxL-idx:idx)+'', sx+G.labelOffX, yB+G.labelOffY); }
+        textAlign(LEFT,CENTER); for(let m=Math.ceil(V.y0/sp); m*sp<=V.y1; m++){ let idx=m-kMin; if(idx<0||idx>maxL||!tierOn(m)) continue; let sy=S(0,m*sp).y; if(sy>=31&&sy<=height) text((G.invertY?maxL-idx:idx)+'', xL+G.labelOffX, sy+G.labelOffY); }
+      } else { textAlign(CENTER,TOP); for(let k=Math.ceil(V.x0/sp); k*sp<=V.x1; k++){ let idx=k-kMin; if(idx<0||idx>maxL||!tierOn(k)) continue; lbl((G.invertX?maxL-idx:idx)+'', k*sp,0,0,4); }
+        textAlign(LEFT,CENTER); for(let m=Math.ceil(V.y0/sp); m*sp<=V.y1; m++){ let idx=m-kMin; if(idx<0||idx>maxL||!tierOn(m)) continue; lbl((G.invertY?maxL-idx:idx)+'', 0,m*sp,5,0); } }
+    } else if(sp*_z>=30){
+      let kMin=Math.ceil(-RAD()/sp), maxIdx=Math.floor(RAD()/sp-0.5)-kMin, lp=LABEL_POS[G.labelPos]||LABEL_POS.center; alignFrom(lp[2],lp[3]);
+      for(let k=Math.floor(V.x0/sp); k*sp<=V.x1; k++){ let cRaw=k-kMin; if(cRaw<0||cRaw>maxIdx) continue;
+        for(let m=Math.floor(V.y0/sp); m*sp<=V.y1; m++){ let rRaw=m-kMin; if(rRaw<0||rRaw>maxIdx) continue;
+          let cxw=(k+0.5)*sp, cyw=(m+0.5)*sp; if(!insideB(cxw,cyw,rGridExtent())) continue;
+          let col=G.invertX?maxIdx-cRaw:cRaw, row=G.invertY?maxIdx-rRaw:rRaw;
+          lbl(G.sqLabelMode==='index'?('('+col+','+row+')'):(colLetter(col)+(row+1)), (k+lp[0])*sp, (m+lp[1])*sp, lp[4], lp[5]); } }
+    }
+  }
+  function drawPolar(){
+    let V=VIS(), rs=G.ringSpacing;
+    let maxR=G.clip?rGridExtent():Math.max(Math.hypot(V.x0,V.y0),Math.hypot(V.x1,V.y0),Math.hypot(V.x0,V.y1),Math.hypot(V.x1,V.y1));
+    let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9));
+    if(maxR/rs<400) for(let r=rs; r<=maxR; r+=rs){ let major=(Math.round(r/rs)%5===0); applyLineStyle(major?G.majorStyle:G.minorStyle); circ(r, major?majc:base, major?G.weight*1.6:G.weight); }
+    let sc=G.spokeCount|0, a0=((POLAR_ZERO[G.polarZero]||0)+G.angleOffset)*Math.PI/180; applyLineStyle(G.minorStyle);
+    for(let i=0;i<sc;i++){ let a=a0+i/sc*Math.PI*2; seg(0,0, Math.cos(a)*maxR, Math.sin(a)*maxR, base, G.weight); }
+    if(!G.labels) return;
+    textAlign(LEFT,BOTTOM); if(maxR/rs<100) for(let r=rs; r<=(G.clip?rGridExtent():maxR); r+=rs){ if(Math.round(r/rs)%5===0) lbl((r|0)+'', 0,-r,4,-2); }
+    textAlign(CENTER,CENTER); let midF=(G.polarLabelAt==='mid')?0.5:0;
+    for(let i=0;i<sc;i++){ let a=a0+(i+midF)/sc*Math.PI*2, lr=rGridExtent()*1.03+G.labelRingPad, txt;
+      if(G.radialMode==='letters') txt=String.fromCharCode(65+(i%26));
+      else if(G.radialMode==='magnetic'){ let b=(Math.round(a0*180/Math.PI+(i+midF)/sc*360+90)%360+360)%360; txt=('00'+b).slice(-3); }
+      else txt=Math.round((i+midF)/sc*360)+'°';
+      lbl(txt, Math.cos(a)*lr, Math.sin(a)*lr, 0, 0); }
+  }
+  function drawHex(){
+    let V=VIS(), s=G.hexSize, dc=drawingContext, col=rgba(G.color,G.opacity);
+    let w=G.hexFlat?s*1.5:Math.sqrt(3)*s, h=G.hexFlat?Math.sqrt(3)*s:s*1.5;
+    let cols=(V.x1-V.x0)/w, rows=(V.y1-V.y0)/h; if(cols*rows>2500) return;
+    dc.strokeStyle=col; dc.lineWidth=G.weight; applyLineStyle(G.majorStyle);
+    let showLab=G.labels && s*_z>=16, R=rGridExtent(); if(showLab) textAlign(CENTER,CENTER);
+    for(let r=Math.floor(V.y0/h)-1; r<=V.y1/h+1; r++){
+      for(let c=Math.floor(V.x0/w)-1; c<=V.x1/w+1; c++){
+        let ox=G.hexFlat?c*w:c*w+(r&1?w/2:0), oy=G.hexFlat?r*h+(c&1?h/2:0):r*h;
+        dc.beginPath(); for(let k=0;k<6;k++){ let ang=(Math.PI/180)*(60*k+(G.hexFlat?0:30)), p=S(ox+Math.cos(ang)*s, oy+Math.sin(ang)*s); if(k===0)dc.moveTo(p.x,p.y); else dc.lineTo(p.x,p.y); }
+        dc.closePath(); dc.stroke();
+        if(showLab && insideB(ox,oy,R)){ let q=G.hexFlat?c:c-Math.floor(r/2), ar=G.hexFlat?r-Math.floor(c/2):r; lbl(q+','+ar, ox, oy, 0, 0); } } }
+  }
+  function segIso(ax,ay,bx,by,col,w){ let a=iso2s(ax,ay,0), b=iso2s(bx,by,0), dc=drawingContext; dc.strokeStyle=col; dc.lineWidth=w; dc.beginPath(); dc.moveTo(a.x,a.y); dc.lineTo(b.x,b.y); dc.stroke(); }
+  function isoLabel(txt,wx,wy){ let s=iso2s(wx,wy,0); noStroke(); fill(G.labelColor[0],G.labelColor[1],G.labelColor[2],230); textSize(G.labelSize); text(txt, s.x+G.labelOffX, s.y+G.labelOffY); }
+  function drawIsoLabels(R,sp,kmax){ textAlign(CENTER,CENTER);
+    if(G.sqLabelMode==='world'){ for(let k=-kmax;k<=kmax;k++){ if(k%G.sqMajor) continue; isoLabel((k*sp|0)+'',k*sp,0); if(k!==0) isoLabel((k*sp|0)+'',0,k*sp); } return; }
+    if(sp*_z<34) return;
+    let kMin=Math.ceil(-R/sp), maxIdx=Math.floor(R/sp-0.5)-kMin;
+    for(let k=Math.floor(-R/sp);(k+0.5)*sp<=R;k++){ let cRaw=k-kMin; if(cRaw<0||cRaw>maxIdx) continue;
+      for(let m=Math.floor(-R/sp);(m+0.5)*sp<=R;m++){ let rRaw=m-kMin; if(rRaw<0||rRaw>maxIdx) continue;
+        let cxw=(k+0.5)*sp, cyw=(m+0.5)*sp; if(!insideB(cxw,cyw,R)) continue;
+        let col=G.invertX?maxIdx-cRaw:cRaw, row=G.invertY?maxIdx-rRaw:rRaw;
+        isoLabel(G.sqLabelMode==='index'?('('+col+','+row+')'):(G.sqLabelMode==='line'?(''+col):(colLetter(col)+(row+1))), cxw, cyw); } }
+  }
+  function drawIso(){
+    let R=rGridExtent(), sp=G.sqSpacing; if(R/sp>500) return;
+    let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9)), axc=rgba(G.color,Math.min(1,G.opacity*2.6));
+    let kmax=Math.floor(R/sp), ext=(v)=>G.boundaryShape==='square'?R:Math.sqrt(Math.max(0,R*R-v*v));
+    for(let k=-kmax;k<=kmax;k++){ let w=k*sp, major=(k%G.sqMajor===0), axis=(k===0); applyLineStyle((major||axis)?G.majorStyle:G.minorStyle);
+      let col=axis?axc:(major?majc:base), lw=(axis?G.weight*2:(major?G.weight*1.6:G.weight)), e=ext(w); segIso(w,-e,w,e,col,lw); segIso(-e,w,e,w,col,lw); }
+    if(G.labels && sp*_z>=20) drawIsoLabels(R,sp,kmax);
+  }
+  function draw(camX,camY,camZoom,force){
+    if(!force && !CFG.grid.on) return;
+    G=CFG.grid; setCam(camX,camY,camZoom);
+    push(); blendMode(BLEND);
+    let clipped=(G.type!=='iso' && G.clip);                                     // screen-space clip can't follow the iso plane; iso bounds itself to the radius
+    if(clipped){ let dc=drawingContext, o=S(0,0); dc.save(); boundaryPath(dc,o, rGridExtent()*_z); dc.clip(); }
+    if(G.type==='square') drawSquare(); else if(G.type==='hex') drawHex(); else if(G.type==='iso') drawIso(); else drawPolar();
+    if(clipped) drawingContext.restore();
+    drawingContext.setLineDash([]); drawingContext.lineCap='butt';
+    if(G.showBoundary){ let dc=drawingContext, col=rgba(G.boundaryColor,G.boundaryOpacity), lw=Math.max(1.5,G.weight*1.5);
+      if(G.type==='iso') drawProjBoundary(rbEdge(), col, lw); else { let o=S(0,0); dc.strokeStyle=col; dc.lineWidth=lw; boundaryPath(dc,o, rbEdge()*_z); dc.stroke(); } }
+    if(G.showOrigin){ let o=proj(0,0), dc=drawingContext, oc=rgba(G.boundaryColor,Math.min(1,G.boundaryOpacity+0.1));
+      dc.strokeStyle=oc; dc.lineWidth=1.5; dc.beginPath(); dc.moveTo(o.x-7,o.y); dc.lineTo(o.x+7,o.y); dc.moveTo(o.x,o.y-7); dc.lineTo(o.x,o.y+7); dc.stroke();
+      dc.fillStyle=oc; dc.beginPath(); dc.arc(o.x,o.y,2.5,0,Math.PI*2); dc.fill(); }
+    pop();
+  }
+  return { draw };
+})();
+function drawGridPreview(){
+  background(4,5,9);
+  let px=(PANELW+width)/2, py=height/2, playW=width-PANELW;
+  let E=(CFG.gen.radius + Math.max(0,CFG.grid.boundaryPad))*(CFG.grid.type==='iso'?1.35:1.06);
+  let fit=Math.min(playW,height)*0.85/(2*Math.max(1,E));
+  noStroke(); for(const s of galaxy){ let x=px+s.x*fit, y=py+s.y*fit; fill(150,165,200,70); circle(x,y,2.2); }   // faint galaxy systems for scale/context
+  GRID.draw(0,0,fit,true);                                                       // force-draw even if 'off', so you can tune it here
+  blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER,BOTTOM);
+  text('grid preview · '+CFG.grid.type+' · boundary = galaxy radius '+CFG.gen.radius+(CFG.grid.on?'':' · (off in galaxy view)')+' · overlays the galaxy in VIEW GALAXY', px, height-16);
+}
 function drawGalaxyView(){
   background(4,5,9);
   drawBackdrop(true);                                       // parallax backdrop (deepest: far nebula/image)
   drawStars();                                              // starfield, per-layer parallax, in front of the backdrop
+  if(CFG.grid.on && CFG.grid.gridZ==='under') GRID.draw();  // coordinate grid as a floor under the galaxy
   drawLanes();                                              // connection beams (screen-space, projected; under the systems)
   drawTraffic();                                            // ships riding the lanes + smuggler drifters (over lanes, under systems)
   let playX=(PANELW+width)/2, playY=height/2, playW=width-PANELW;
@@ -635,6 +794,7 @@ function drawGalaxyView(){
     drawn++;
   }
   pop();
+  if(CFG.grid.on && CFG.grid.gridZ==='over') GRID.draw();   // coordinate grid as a HUD overlay on top of the galaxy
   if(!fullscreen){ blendMode(BLEND); noStroke(); textAlign(LEFT, TOP); fill(120,140,175); textSize(11);
     text(galaxy.length+' stars · '+drawn+' drawn · '+(baked?('BAKED'+(liveOverlay?'+live':'')):'live')+' · '+sunSpriteCache.size+' sprites · zoom '+cam.zoom.toFixed(2)+'   [drag/wheel]', PANELW+12, 40); }
 }
@@ -691,14 +851,13 @@ let bdBuf={}, bdDirty=true;                                                   //
 function bdExtent(){ return CFG.gen.radius * CFG.backdrop.cover; }             // world half-size the backdrop covers
 function invalidateBackdrop(){ bdDirty=true; }                               // rebuild baked layer buffers lazily next frame
 function bdHash(i,s){ let x=Math.sin(i*127.1 + s*311.7)*43758.5453; return x-Math.floor(x); }   // seeded 0..1
-const BD_LAYERS = ['base','img','neb','grid','fade'];                          // bottom -> top stacking order
-const BD_BLEND  = { base:'blend', img:'blend', neb:'add', grid:'blend', fade:'blend' };   // per-layer blit blend mode
+const BD_LAYERS = ['base','img','neb','fade'];                          // bottom -> top stacking order (grid moved to its own tab)
+const BD_BLEND  = { base:'blend', img:'blend', neb:'add', fade:'blend' };   // per-layer blit blend mode
 function drawOneBdLayer(P, E, L){
   let B=CFG.backdrop;
   if(L==='base')      bd_base (P,E,B);
   else if(L==='img')  bd_image(P,E,B);
   else if(L==='neb')  bd_neb  (P,E,B);
-  else if(L==='grid') bd_grid (P,E,B);
   else if(L==='fade') bd_fade (P,E,fadeParams(B,1));
 }
 let bdImgCache = {};    // index -> p5.Image once loaded ('loading' in flight, false on error)
@@ -816,14 +975,6 @@ function bd_neb(P,E,B){
     P.drawingContext.fillStyle=g; P.circle(x,y,rad*2);
   }
   P.pop(); P.blendMode(BLEND);
-}
-function bd_grid(P,E,B){
-  P.push(); P.noFill(); P.strokeWeight(B.gridWeight);
-  P.stroke(B.gridColor[0],B.gridColor[1],B.gridColor[2],255*B.gridOpacity);
-  let sp=B.gridSpacing;
-  for(let x=0;x<=E;x+=sp){ P.line(x,-E,x,E); if(x>0) P.line(-x,-E,-x,E); }
-  for(let y=0;y<=E;y+=sp){ P.line(-E,y,E,y); if(y>0) P.line(-E,-y,E,-y); }
-  P.pop();
 }
 function fadeParams(B,n){ let p=(n===2?'fade2':'fade'); return { on:B[p+'On'], track:B[p+'Track'], color:B[p+'Color'], inner:B[p+'Inner'], outer:B[p+'Outer'], opacity:B[p+'Opacity'], curve:B[p+'Curve'], shape:B[p+'Shape'] }; }
 function fadeStops(g,F){ let n=12, cv=(F.curve||1), op=F.opacity; for(let i=0;i<=n;i++){ let t=i/n; g.addColorStop(t, rgba(F.color, Math.pow(t,cv)*op)); } }   // curved alpha ramp inner->outer (softness)
@@ -1165,16 +1316,14 @@ const BACKDROP_SCHEMA = [
     ['nebContrast','Contrast','range',0.4,3,0.05],['nebThreshold','Threshold','range',0,0.8,0.01],['nebOpacity','Intensity','range',0,2,0.01],
     ['nebCount','Blob count','range',0,120,1],['nebSeed','Seed','range',1,999,1],['nebTrack','Track','select',[['viewport','Viewport'],['map','Map (galaxy)']]]]],
   ['Nebula motion', [['nebAnimOn','Step over time','bool'],['nebInterval','Interval (s)','range',1,30,0.5],['nebStep','Step size','range',0.005,0.3,0.005],['nebBlend','Blend (s)','range',0,5,0.1]]],
-  ['Grid overlay', [['gridOn','Grid','bool'],['gridColor','Color','color'],['gridOpacity','Opacity','range',0,1,0.01],
-    ['gridSpacing','Spacing','range',50,600,10],['gridWeight','Line weight','range',0.5,4,0.5]]],
   ['Radial fade 1', [['fadeOn','Fade','bool'],['fadeTrack','Track','select',[['viewport','Viewport'],['map','Map (galaxy)']]],['fadeColor','Edge color','color'],
     ['fadeInner','Inner','range',0,2,0.01],['fadeOuter','Outer','range',0.2,3,0.01],['fadeOpacity','Opacity','range',0,1,0.01],
     ['fadeCurve','Softness','range',0.2,4,0.05],['fadeShape','Shape','range',0,1,0.01]]],
   ['Radial fade 2', [['fade2On','Fade','bool'],['fade2Track','Track','select',[['viewport','Viewport'],['map','Map (galaxy)']]],['fade2Color','Edge color','color'],
     ['fade2Inner','Inner','range',0,2,0.01],['fade2Outer','Outer','range',0.2,3,0.01],['fade2Opacity','Opacity','range',0,1,0.01],
     ['fade2Curve','Softness','range',0.2,4,0.05],['fade2Shape','Shape','range',0,1,0.01]]],
-  ['Parallax (galaxy view)', [['imgParallax','Image','range',0,1,0.01],['nebParallax','Nebula','range',0,1,0.01],['baseParallax','Base','range',0,1,0.01],['gridParallax','Grid','range',0,1,0.01]]],
-  ['Bake includes (off = drawn live)', [['bake_base','Base','bool'],['bake_img','Image','bool'],['bake_neb','Nebula','bool'],['bake_grid','Grid','bool'],['bake_fade','Fade','bool']]]
+  ['Parallax (galaxy view)', [['imgParallax','Image','range',0,1,0.01],['nebParallax','Nebula','range',0,1,0.01],['baseParallax','Base','range',0,1,0.01]]],
+  ['Bake includes (off = drawn live)', [['bake_base','Base','bool'],['bake_img','Image','bool'],['bake_neb','Nebula','bool'],['bake_fade','Fade','bool']]]
 ];
 const LN_OPT_CONN =[['knn','K-nearest (tier)'],['threshold','All within range'],['mst','Spanning tree'],['gabriel','Gabriel web']];
 const LN_OPT_CMODE=[['multi','Multicolor'],['single','Single color'],['tier','By tier']];
@@ -1217,6 +1366,31 @@ const LANE_PRESETS = {
 };
 let lnPreset='galaxy01';
 function applyLanePreset(name){ let p=LANE_PRESETS[name]; if(!p)return; lnPreset=name; Object.assign(CFG.lanes, JSON.parse(JSON.stringify(p.ov))); lnNeedsBuild=true; showPage(); }
+const GRID_SCHEMA = [
+  ['Grid', [['on','Grid on','bool'],['type','Type','select',GRID_OPT_TYPE],['gridZ','Draw order','select',[['over','Over systems'],['under','Under systems']]],['color','Major color','color'],['opacity','Major opacity','range',0,1,0.01],['minorColor','Minor color','color'],['minorBright','Minor bright','range',0.2,2.5,0.05],['minorOpacity','Minor opacity','range',0,1,0.01],['weight','Weight','range',0.25,4,0.25],['majorStyle','Major style','select',GRID_OPT_STYLE],['minorStyle','Minor style','select',GRID_OPT_STYLE],['dashScale','Dash scale','range',0.3,4,0.1]]],
+  ['Boundary (galaxy edge)', [['showBoundary','Boundary','bool'],['boundaryShape','Shape','select',[['circle','Circle'],['square','Square']]],['boundaryPad','Edge padding','range',-400,1200,10],['gridInset','Grid inset','range',0,800,10],['labelRingPad','Label ring','range',-200,300,5],['boundaryColor','Color','color'],['boundaryOpacity','Opacity','range',0,1,0.01],['clip','Clip grid to it','bool'],['showOrigin','Origin marker','bool']]],
+  ['Square', [['sqSpacing','Spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1],['sqSubdiv','Subdivisions','range',1,10,1],['sqLabelMode','Label mode','select',[['world','World coords'],['coord','Sectors (A1)'],['index','Cell index'],['line','Line numbers']]],['edgeLabels','Coords at edge','bool'],['lineNumMajor','Number major lines','bool'],['lineNumMinor','Number minor lines','bool'],['invertX','Invert cols (X)','bool'],['invertY','Invert rows (Y)','bool']]],
+  ['Polar', [['ringSpacing','Ring spacing','range',30,600,10],['spokeCount','Spokes','range',0,48,1],['angleOffset','Angle offset','range',0,360,1]]],
+  ['Hex', [['hexSize','Hex size','range',30,400,5],['hexFlat','Flat-top','bool']]],
+  ['Isometric', [['isoRot','Yaw / spin','range',0,360,5],['isoPitch','Pitch (squash)','range',0.2,1.4,0.05],['sqSpacing','Floor spacing','range',20,600,10],['sqMajor','Major every','range',1,12,1]]],
+  ['Labels', [['labels','Labels','bool'],['radialMode','Radial labels','select',[['letters','Letters (A,B,C)'],['degrees','Degrees'],['magnetic','Magnetic radials']]],['labelColor','Color','color'],['labelSize','Size','range',8,20,1]]],
+  ['Label placement', [['labelPos','Cell anchor','select',[['center','Center'],['top','Top'],['bottom','Bottom'],['left','Left'],['right','Right'],['tl','Top-left'],['tr','Top-right'],['bl','Bottom-left'],['br','Bottom-right']]],['labelOffX','Offset X','range',-30,30,1],['labelOffY','Offset Y','range',-30,30,1],['polarZero','Polar 0° at','select',[['east','East →'],['north','North ↑'],['west','West ←'],['south','South ↓']]],['polarLabelAt','Polar labels','select',[['line','On spoke line'],['mid','Wedge midpoint']]]]]
+];
+const GRID_PRESETS = {
+  blueprint:{name:'Blueprint (square)', ov:{type:'square',color:[70,140,210],opacity:0.45,weight:1,sqSpacing:150,sqMajor:5,labels:true,showBoundary:true,boundaryColor:[120,200,255]}},
+  radar:{name:'Radar (polar)', ov:{type:'polar',color:[60,200,150],opacity:0.4,ringSpacing:150,spokeCount:12,labels:true,radialMode:'magnetic',polarZero:'north',boundaryColor:[110,255,200],showBoundary:true}},
+  galactic:{name:'Galactic sectors (polar)', ov:{type:'polar',color:[90,150,230],opacity:0.4,ringSpacing:120,spokeCount:16,labels:true,radialMode:'letters',angleOffset:0,boundaryColor:[130,180,255]}},
+  hexsect:{name:'Hex sectors', ov:{type:'hex',color:[220,170,90],opacity:0.4,hexSize:120,hexFlat:false,labels:false,boundaryColor:[255,200,120]}},
+  hexaxial:{name:'Hex axial (q,r)', ov:{type:'hex',color:[220,170,90],opacity:0.45,hexSize:130,hexFlat:false,labels:true,labelSize:11,labelColor:[245,215,150],boundaryColor:[255,200,120]}},
+  minimal:{name:'Minimal (faint square)', ov:{type:'square',color:[80,110,150],opacity:0.22,weight:1,sqSpacing:200,sqMajor:4,labels:false,showBoundary:false}},
+  graphpaper:{name:'Graph paper (square)', ov:{type:'square',color:[90,130,170],opacity:0.5,weight:1,sqSpacing:60,sqMajor:5,sqSubdiv:1,sqLabelMode:'line',lineNumMajor:true,lineNumMinor:true,labels:true,showBoundary:false}},
+  tactical:{name:'Tactical (world coords)', ov:{type:'square',color:[80,180,140],opacity:0.4,weight:1,sqSpacing:120,sqMajor:5,sqLabelMode:'world',edgeLabels:true,labels:true,showBoundary:true,boundaryShape:'square',boundaryColor:[120,255,200]}},
+  deepspace:{name:'Deep-space (dotted, faint)', ov:{type:'square',color:[110,130,170],opacity:0.3,majorStyle:'dotted',minorStyle:'dotted',dashScale:1.4,sqSpacing:100,sqMajor:5,labels:false,showBoundary:false,showOrigin:false}},
+  navscope:{name:'Nav scope (compass, dense)', ov:{type:'polar',color:[60,210,160],opacity:0.45,ringSpacing:100,spokeCount:24,labels:true,radialMode:'magnetic',polarZero:'north',polarLabelAt:'line',boundaryColor:[110,255,200],showBoundary:true}},
+  longitude:{name:'Galactic longitude (wedges)', ov:{type:'polar',color:[130,150,240],opacity:0.4,ringSpacing:140,spokeCount:12,labels:true,radialMode:'letters',polarLabelAt:'mid',angleOffset:15,boundaryColor:[150,170,255]}},
+  isofloor:{name:'Isometric floor', ov:{type:'iso',color:[120,180,240],opacity:0.4,weight:1,sqSpacing:150,sqMajor:5,isoRot:0,isoPitch:1,sqLabelMode:'coord',labels:false,showBoundary:true,boundaryColor:[150,190,255]}}
+};
+let gridPreset='';
 const PAGES = [
   { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true, onChange: invalidateSunSprites },
   { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: regenerate },
@@ -1224,6 +1398,7 @@ const PAGES = [
   { id:'stars',    label:'Stars',      schema: [], target: ()=>CFG.stars, custom:'stars' },
   { id:'lanes',    label:'Lanes',      schema: LANES_SCHEMA, target: ()=>CFG.lanes, lanePresets:true, onChange: onLaneChange },
   { id:'traffic',  label:'Traffic',    schema: [], target: ()=>CFG.traffic, custom:'traffic' },
+  { id:'grid',     label:'Grid',       schema: GRID_SCHEMA, target: ()=>CFG.grid, gridPresets:true },
   { id:'economy',  label:'Economy',    schema: [],         target: ()=>CFG.economy }
 ];
 let activePage = 'sun';
@@ -1245,6 +1420,7 @@ function showPage(){
   let page=PAGES.find(p=>p.id===activePage);
   if(page.presets) buildPresetRow(body);
   if(page.lanePresets) buildLanePresetRow(body);
+  if(page.gridPresets) buildGridPresetRow(body);
   if(page.custom==='stars'){ buildStarsPanel(body); return; }
   if(page.custom==='traffic'){ buildTrafficPanel(body); return; }
   if(!page.schema.length){
@@ -1282,6 +1458,17 @@ function buildLanePresetRow(body){
   pr.appendChild(sel); body.appendChild(pr);
   let ph=document.createElement('div'); ph.className='hint'; ph.style.margin='2px 0 4px'; ph.textContent='lane look presets — nodes are the galaxy systems'; body.appendChild(ph);
 }
+function buildGridPresetRow(body){
+  let pr=document.createElement('div'); pr.className='row';
+  let pl=document.createElement('span'); pl.className='lab'; pl.textContent='Preset'; pr.appendChild(pl);
+  let sel=document.createElement('select');
+  let o0=document.createElement('option'); o0.value=''; o0.textContent='— pick a grid preset —'; sel.appendChild(o0);
+  for(const k of Object.keys(GRID_PRESETS)){ let o=document.createElement('option'); o.value=k; o.textContent=GRID_PRESETS[k].name; sel.appendChild(o); }
+  sel.value=gridPreset; sel.onchange=()=>{ if(sel.value) applyGridPreset(sel.value); };
+  pr.appendChild(sel); body.appendChild(pr);
+  let ph=document.createElement('div'); ph.className='hint'; ph.style.margin='2px 0 4px'; ph.textContent='grid look presets — boundary tracks the galaxy radius'; body.appendChild(ph);
+}
+function applyGridPreset(name){ let p=GRID_PRESETS[name]; if(!p) return; gridPreset=name; Object.assign(CFG.grid, JSON.parse(JSON.stringify(p.ov))); showPage(); }
 function buildControls(schema, target, body, onChange){
   for(const [group, items] of schema){
     let h=document.createElement('div'); h.className='grp'; h.textContent=group; body.appendChild(h);
