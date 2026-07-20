@@ -3,6 +3,21 @@
 > **Home:** `EBB_TBC_V5/galaxy_sandbox/` · started 2026-07-17
 > **North star:** one app where **every part of the galaxy is a tunable option**, with a **"View Galaxy"** mode that renders the result live — a galaxy configurator/sandbox grown out of the sun options menu.
 
+## Foundation direction — WORLD consumer *(north-star; locked 2026-07-20, NOT built)*
+
+**A standing compatibility constraint on all future work, not a task.** galaxy_studio is heading toward becoming a **consumer of the WORLD space (and later time) dimension** as its position / scale / clock foundation (WORLD = a portable, framework-free fixed-point world-model at `EBB_TBC_V4/BR_BRAINSTORMING/20260620_WORLD/` — read `WORLD_PRINCIPLES.txt` + `modules/space/{constants,fixedpoint,index}.v01.ts` + `modules/time/{constants,clock,stack,types}.v01.ts`). **The rule: build *toward* it — don't build anything that would have to be ripped out to become a consumer.** Nothing is adopted yet.
+
+**Guardrails (what "stay compatible" means concretely):**
+- **Space** — 2D on the ENU **ground plane** (`z=0`; iso is a *view*, not a data axis); **data-layer Y-up** (flip only at render); **`dist_unit` = a genre override over WORLD's datum "click"** (identity default), *not* an independent parallel datum; **identity / `S`-ids stay ours — WORLD owns position only.**
+- **Screen frame stays ours** — WORLD deliberately doesn't model the pixel/render frame (the seam our size-conflation lives at), so the **map-vs-screen two-frame** discipline is the layer WORLD hands off to us, not something it replaces.
+- **Time** — animation (bloom / twinkle / traffic visuals) = **cosmetic / realtime**; **TICKS reserved for a future deterministic sim**. Three-clock separation adopted as a principle now, **code later** (time is a *latent* need — current time is cosmetic).
+- **Rates** (traffic speed = clicks/tick, economy = units/tick) live in a **physics/asset layer — never in space or time config.**
+- **LOD ladder stays magnitude-agnostic** — authored freely, *not* derived from WORLD's magnitude lens (`10^(mag-1)`). The bridge is an **inert per-stop LOD-tab marker** — *"this level starts the next magnitude lens"* — that stores the **magnitude value** it maps to; changes nothing at runtime, just records where the boundaries fall so a future magnitude-aware system reads the markers instead of forcing a re-author.
+
+**Phasing.** (1) principles / vocabulary now — `datum → world → genre`, one-unit-derived-measures, three-clock split (free, no dependency); (2) an **interface contract** when permanence lands — declare a system's position *as* WORLD's `CanonicalPosition` shape, Y-up, magnitude↔zoom mapping, **pin WORLD v01** (keep `Number` internally); (3) **actual code import** at a concrete trigger — coords exceed double precision · replay/lockstep/netcode · true 3D · a live tick-driven sim.
+
+**Gates / risks to remember.** WORLD **SPACE + TIME are complete**, but **RESOURCE laws + PHYSICS are banked, not built** — a *simulated economic galaxy* on WORLD depends on parts that don't exist yet and pulls `economy_sandbox` into the decision. Consuming WORLD (`.ts` modules) implies a **build step** (vs today's single-file HTML) and an **export-schema change** (positions → BigInt strings) that ripples to the embeddable galaxy-player port's input contract.
+
 ## Provenance
 - **Seed program:** `sun_exhibit_03_options.html` — the unified sun build (every effect + live options menu + preset selector). Currently at `EBB_TBC_V4/BR_BRAINSTORMING/20260615_GALAXY/sun_exhibit/`.
 - **Engine to reuse:** `galaxy_translator_01` (same folder) — working generation, lanes, traffic, economy, viewport culling, and the promoted sun renderer. Design/handoff: `galaxy_translator_design_intent_01.md`.
