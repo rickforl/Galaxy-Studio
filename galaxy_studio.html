@@ -65,7 +65,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '01';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.01: DATUM measurement-frame module — behavior-preserving extraction]
+const BUILD_SEQ  = '02';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.02: px→world FLIP of ship-size/gap + lane-gap + first migration test]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -178,6 +178,20 @@ let OPTS = CFG.sun;                                 // sun renderer reads OPTS (
 const BASE = JSON.parse(JSON.stringify(CFG.sun));   // sun defaults — preset switching resets to these first
 
 // milestone presets — overrides merged onto OPTS at startup (the archive versions)
+// ---- Datum measurement-frame calibration (px-era -> world-units) --------------------------------
+// The ship-size/gap + lane-gap DEFAULTS/PRESETS are authored in familiar SCREEN px (the numbers that
+// looked right at the old default zoom). Build .02 flipped them to the MAP frame (world × zoom), so we
+// convert px -> world ONCE, here: world = px / DATUM_REF. (Saved user configs are remapped instead by
+// migrateSnapshot, dividing by THEIR OWN saved zoom.) One conversion, expressed in one place.
+// (Lives here, not in the DATUM module, only because it must run right after the CFG literal at load.)
+const DATUM_REF = 0.35;                                         // legacy reference zoom = the px-era default view
+const PX2W_LANE = ['offLaneGap','unoLaneGap','transLaneGap'];   // lane-config keys that flipped px -> world (MAP frame)
+const PX2W_TRAF = ['size','gap'];                               // traffic-layer keys that flipped px -> world
+function pxToWorldLanes(o, div){ if(o) for(const k of PX2W_LANE) if(typeof o[k]==='number') o[k]/=div; }
+function pxToWorldTraf(L, div){ if(L) for(const k of PX2W_TRAF) if(typeof L[k]==='number') L[k]/=div; }
+pxToWorldLanes(CFG.lanes, DATUM_REF);                          // normalize the in-code lane defaults once at load
+if(CFG.traffic && CFG.traffic.layers) CFG.traffic.layers.forEach(L=>pxToWorldTraf(L, DATUM_REF));
+
 const PRESETS = {
   current:       {},                                                                                              // 00 working default (= CFG.sun / imported cfg)
   full_rich:     { previewR: 90 },                                                                                 // 01 everything on, big
@@ -447,7 +461,7 @@ function lnDrawOne(L, ax,ay,bx,by, z){
   let gap=DATUM.mapPx(eg,z,0); ax+=ux*gap; ay+=uy*gap; bx-=ux*gap; by-=uy*gap;   // node gap = MAP frame (world × zoom); floor 0 keeps it byte-identical to eg*z
   if(Math.hypot(bx-ax,by-ay)<2) return;
   let td=(C.pathMode!=='straight')?L.td:null;
-  if(tw){ let off=DATUM.screenPx(lg)*(0.6+0.8*L.r);   // lane gap = SCREEN frame today → flips to mapPx in Step B
+  if(tw){ let off=DATUM.mapPx(lg, z, 0)*(0.6+0.8*L.r);   // lane gap = MAP frame (world × zoom)
     lnBeam(ax,ay,bx,by, off, td, len, ux,uy,nx,ny, lnColor(L,0), st,w,op,glow,ef,cv);
     lnBeam(ax,ay,bx,by,-off, td, len, ux,uy,nx,ny, lnColor(L,1), st,w,op,glow,ef,cv);
   } else lnBeam(ax,ay,bx,by, 0, td, len, ux,uy,nx,ny, lnColor(L,0), st,w,op,glow,ef,cv);
@@ -483,8 +497,9 @@ function trGlow(x,y,r,c,a){ let dc=drawingContext, g=dc.createRadialGradient(x,y
 function trTri(x,y,ang,r,c){ let dc=drawingContext; dc.save(); dc.translate(x,y); dc.rotate(ang); dc.fillStyle=rgba(c,0.95); dc.beginPath(); dc.moveTo(r,0); dc.lineTo(-r*0.72,r*0.62); dc.lineTo(-r*0.72,-r*0.62); dc.closePath(); dc.fill(); dc.restore(); }
 function trShipXY(a,b,s,t,gap){ let p=((s.base+t*s.spd)%1+1)%1, frac=s.dir>0?p:1-p, dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1, nx=-dy/len, ny=dx/len, g=(s.off||0)*gap;
   return { x:a.x+dx*frac+nx*g, y:a.y+dy*frac+ny*g, ang:Math.atan2(dy*s.dir,dx*s.dir), frac, dir:s.dir, u:{x:dx/len,y:dy/len} }; }
-function trafRenderShips(a,b, ships, L, t, laneCol, lodF){
-  let sz=DATUM.screenPx(L.size), st=L.style, gap=DATUM.screenPx(L.gap||0), fade=L.fade||0, dc=drawingContext;   // ship size + gap = SCREEN frame today → flip to mapPx (needs zoom) in Step B
+function trafRenderShips(a,b, ships, L, t, laneCol, lodF, z){
+  if(z===undefined) z=cam.zoom||1;                                                                             // MAP-frame ship sizing needs the current zoom
+  let sz=DATUM.mapPx(L.size, z, 0), st=L.style, gap=DATUM.mapPx(L.gap||0, z, 0), fade=L.fade||0, dc=drawingContext;   // ship size + gap = MAP frame (world × zoom)
   let lim=(lodF==null||lodF>=1)?ships.length:Math.max(1,Math.round(ships.length*lodF));   // LOD: fewer ships when zoomed out
   for(let i=0;i<lim;i++){ let s=ships[i], p=trShipXY(a,b,s,t,gap), c=trafColor(s,L,laneCol);
     let al=1; if(fade>0){ if(p.frac<fade) al=p.frac/fade; else if(p.frac>1-fade) al=(1-p.frac)/fade; }        // fade at the ends
@@ -512,13 +527,13 @@ function drawTraffic(camX,camY,camZoom){
       for(let pi=0;pi<pairs.length;pi++){ let A=galaxy[pairs[pi][0]], B=galaxy[pairs[pi][1]];
         let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
         if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
-        trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,pi), L, L.time||0, L.color, lodF); }
+        trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,pi), L, L.time||0, L.color, lodF, z); }
       continue; }
     for(let li=0;li<laneList.length;li++){ let lane=laneList[li]; if(lane.kind!==L.kind) continue;
       let A=galaxy[lane.a], B=galaxy[lane.b];
       let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
       if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
-      trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,li), L, L.time||0, lnColor(lane,0), lodF); }
+      trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,li), L, L.time||0, lnColor(lane,0), lodF, z); }
   }
   pop(); blendMode(BLEND);
 }
@@ -538,8 +553,8 @@ function drawTrafficEditGrid(idx){
     noStroke(); fill(8,11,18); rect(cell.x,cell.y,cell.w,cell.h);
     let A={x:cell.x+cell.w*0.16,y:cell.y+cell.h*0.55}, B={x:cell.x+cell.w*0.84,y:cell.y+cell.h*0.55};
     push(); blendMode(ADD);
-    if(L.kind!=='smuggler'){ lnBreathe=1; lnDrawOne({kind:L.kind,a:0,b:1,col:[120,190,255],col2:[255,180,120],r:0.5,td:null}, A.x,A.y,B.x,B.y, 1); }   // sample lane = this class's look
-    let ps=L.style; L.style=cell.style; trafRenderShips(A,B, trafEditShips, L, L.time||0, [120,190,255]); L.style=ps;                                     // ships in this cell's style
+    if(L.kind!=='smuggler'){ lnBreathe=1; lnDrawOne({kind:L.kind,a:0,b:1,col:[120,190,255],col2:[255,180,120],r:0.5,td:null}, A.x,A.y,B.x,B.y, DATUM_REF); }   // sample lane at the reference zoom (canonical preview look)
+    let ps=L.style; L.style=cell.style; trafRenderShips(A,B, trafEditShips, L, L.time||0, [120,190,255], 1, DATUM_REF); L.style=ps;                        // ships at the reference zoom (canonical preview look)
     pop(); blendMode(BLEND);
     noStroke(); fill(230,238,255,235); circle(A.x,A.y,5); circle(B.x,B.y,5);
     dc.restore();
@@ -557,7 +572,7 @@ function trafBool(parent,label,val,onc){ let r=trafRow(parent,label); let i=docu
 function trafRange(parent,label,mn,mx,st,val,onc){ let r=trafRow(parent,label); let i=document.createElement('input'); i.type='range'; i.min=mn;i.max=mx;i.step=st;i.value=val; let v=document.createElement('span'); v.className='val'; v.textContent=val; i.oninput=()=>{ v.textContent=i.value; onc(parseFloat(i.value)); }; r.appendChild(i); r.appendChild(v); return i; }
 function trafSelect(parent,label,opts,val,onc){ let r=trafRow(parent,label); let s=document.createElement('select'); for(const [v,l] of opts){ let o=document.createElement('option'); o.value=v; o.textContent=l; s.appendChild(o); } s.value=val; s.onchange=()=>onc(s.value); r.appendChild(s); return s; }
 function trafColorInp(parent,label,val,onc){ let r=trafRow(parent,label); let i=document.createElement('input'); i.type='color'; i.value=rgbToHex(val); i.oninput=()=>onc(hexToRgb(i.value)); r.appendChild(i); return i; }
-function trafNewLayer(){ return { name:'Extra', on:true, kind:'off', style:'civilian', count:4, speed:1, size:1, colorMode:'multi', color:[150,200,255], dir:'dual2', gap:4, fade:0.15, minDist:300, maxDist:680, links:1, seed:(Math.floor(Math.random()*1e6)||1) }; }
+function trafNewLayer(){ let L={ name:'Extra', on:true, kind:'off', style:'civilian', count:4, speed:1, size:1, colorMode:'multi', color:[150,200,255], dir:'dual2', gap:4, fade:0.15, minDist:300, maxDist:680, links:1, seed:(Math.floor(Math.random()*1e6)||1) }; pxToWorldTraf(L, DATUM_REF); return L; }   // size/gap authored in px → store world
 function trafLayerBlock(body,L,idx){
   let box=document.createElement('div'); box.style.cssText='border:1px solid #2a3550;border-radius:5px;padding:4px 6px;margin:5px 0;';
   let hd=document.createElement('div'); hd.style.cssText='display:flex;align-items:center;gap:6px;margin-bottom:2px;';
@@ -576,8 +591,8 @@ function trafLayerBlock(body,L,idx){
   trafColorInp(box,'Color', L.color, c=>{L.color=c;});
   trafRange(box,'Ships/lane', 0,20,1, L.count, v=>{L.count=v|0; invalidateTraffic();});
   trafRange(box,'Speed', 0,3,0.05, L.speed, v=>{L.speed=v;});
-  trafRange(box,'Size', 0.3,3,0.05, L.size, v=>{L.size=v;});
-  trafRange(box,'Lane gap', 0,12,0.5, L.gap, v=>{L.gap=v;});
+  trafRange(box,'Size', 0.3,9,0.1, L.size, v=>{L.size=v;});
+  trafRange(box,'Lane gap', 0,36,0.5, L.gap, v=>{L.gap=v;});
   trafRange(box,'End fade', 0,0.49,0.01, L.fade, v=>{L.fade=v;});
   if(L.kind==='smuggler'){ trafRange(box,'Min dist', 50,1400,10, L.minDist, v=>{L.minDist=v; invalidateTraffic();}); trafRange(box,'Max dist', 100,2400,10, L.maxDist, v=>{L.maxDist=v; invalidateTraffic();}); trafRange(box,'Links/sys', 0,4,1, L.links, v=>{L.links=v|0; invalidateTraffic();}); }
   body.appendChild(box);
@@ -593,8 +608,8 @@ function buildTrafficEditPanel(body, idx){
   trafColorInp(body,'Color', L.color, c=>{L.color=c;});
   trafRange(body,'Ships/lane', 0,20,1, L.count, v=>{L.count=v|0; invalidateTraffic();});
   trafRange(body,'Speed', 0,3,0.05, L.speed, v=>{L.speed=v;});
-  trafRange(body,'Size', 0.3,3,0.05, L.size, v=>{L.size=v;});
-  trafRange(body,'Lane gap', 0,12,0.5, L.gap, v=>{L.gap=v;});
+  trafRange(body,'Size', 0.3,9,0.1, L.size, v=>{L.size=v;});
+  trafRange(body,'Lane gap', 0,36,0.5, L.gap, v=>{L.gap=v;});
   trafRange(body,'End fade', 0,0.49,0.01, L.fade, v=>{L.fade=v;});
   if(L.kind==='smuggler'){ trafRange(body,'Min dist', 50,1400,10, L.minDist, v=>{L.minDist=v; invalidateTraffic();}); trafRange(body,'Max dist', 100,2400,10, L.maxDist, v=>{L.maxDist=v; invalidateTraffic();}); trafRange(body,'Links/sys', 0,4,1, L.links, v=>{L.links=v|0; invalidateTraffic();}); }
   let hint=document.createElement('div'); hint.className='hint'; hint.textContent="Cells show each style on a sample lane drawn with this class's Lanes-tab look. Edits preview live in the grid."; body.appendChild(hint);
@@ -1209,7 +1224,18 @@ function exitFullscreen(){ let inFs=!!document.fullscreenElement; applyFullscree
 const CFG_KEY='galaxy_studio_cfg';
 let lastSaved='', lastSaveCheck=0;
 function studioSnapshot(){ return Object.assign({}, CFG, { build: BUILD_ID, view:{ camX:cam.x, camY:cam.y, camZoom:cam.zoom, preset:ACTIVE_PRESET } }); }   // full studio state: build id + all CFG + framing + preset. `build` is metadata — applySnapshot ignores it (only merges CFG sections + view), so it round-trips harmlessly.
+function buildNum(id){ let m=/(\d{8})\.(\d+)/.exec(id||''); return m ? (+m[1])*100 + (+m[2]) : 0; }   // 'v0.1_20260720.02' -> 2026072002 (date*100 + seq); missing -> 0
+const FLIP_BUILD = 2026072002;   // build .02: ship-size/gap + lane-gap became MAP-frame world-units; older snapshots stored them as SCREEN px
+function migrateSnapshot(c){                                // FIRST migration test — load-time LOCAL reconciliation (no network / update-check)
+  if(!c || typeof c!=='object' || buildNum(c.build) >= FLIP_BUILD) return c;   // already world-frame (or newer) — nothing to do
+  let z=(c.view && typeof c.view.camZoom==='number' && c.view.camZoom>0) ? c.view.camZoom : DATUM_REF;   // remap so it renders the SAME at its saved framing
+  pxToWorldLanes(c.lanes, z);
+  if(c.traffic && Array.isArray(c.traffic.layers)) c.traffic.layers.forEach(L=>pxToWorldTraf(L, z));
+  c.build = BUILD_ID;                                       // re-stamp so a re-save/re-load never double-migrates
+  return c;
+}
 function applySnapshot(c){                                  // merge a snapshot into CFG + view (shared by import + localStorage load)
+  c=migrateSnapshot(c);                                     // version-aware px->world remap for pre-flip (.01 and earlier) configs
   for(const sec in CFG){ if(c[sec]) Object.assign(CFG[sec], c[sec]); }
   if(c.view){ if(typeof c.view.camX==='number') cam.x=c.view.camX; if(typeof c.view.camY==='number') cam.y=c.view.camY; if(typeof c.view.camZoom==='number') cam.zoom=c.view.camZoom;
     if(c.view.preset && PRESETS[c.view.preset]) ACTIVE_PRESET=c.view.preset; }   // display only — never applyPreset (would clobber the loaded sun values)
@@ -1494,13 +1520,13 @@ const LANES_SCHEMA = [
     ['unoColorMode','Unofficial mode','select',LN_OPT_CMODE],['unoColor','Unofficial color','color'],
     ['transColorMode','Transport mode','select',LN_OPT_CMODE],['transColor','Transport color','color']]],
   ['Official style', [['offStyle','Style','select',LN_OPT_STYLE],['offW','Width','range',0.3,8,0.1],['offOpacity','Opacity','range',0,1,0.01],
-    ['offGlow','Glow','range',0,5,0.1],['offTwoWay','Two-way','bool'],['offLaneGap','Lane gap','range',0,14,0.5],
+    ['offGlow','Glow','range',0,5,0.1],['offTwoWay','Two-way','bool'],['offLaneGap','Lane gap','range',0,40,0.5],
     ['offEndGap','Node gap','range',0,50,1],['offEndFade','End fade','range',0,0.49,0.01],['offCurve','Curve','range',-2,2,0.05],['offBeamless','Beamless','bool']]],
   ['Unofficial style', [['unoStyle','Style','select',LN_OPT_STYLE],['unoTwoWay','Two-way','bool'],['unoW','Width','range',0.3,8,0.1],
-    ['unoOpacity','Opacity','range',0,1,0.01],['unoGlow','Glow','range',0,5,0.1],['unoLaneGap','Lane gap','range',0,14,0.5],
+    ['unoOpacity','Opacity','range',0,1,0.01],['unoGlow','Glow','range',0,5,0.1],['unoLaneGap','Lane gap','range',0,40,0.5],
     ['unoEndGap','Node gap','range',0,50,1],['unoEndFade','End fade','range',0,0.49,0.01],['unoCurve','Curve','range',-2,2,0.05]]],
   ['Transport style', [['transStyle','Style','select',LN_OPT_STYLE],['transTwoWay','Two-way','bool'],['transW','Width','range',0.3,8,0.1],
-    ['transOpacity','Opacity','range',0,1,0.01],['transGlow','Glow','range',0,5,0.1],['transLaneGap','Lane gap','range',0,14,0.5],
+    ['transOpacity','Opacity','range',0,1,0.01],['transGlow','Glow','range',0,5,0.1],['transLaneGap','Lane gap','range',0,40,0.5],
     ['transEndGap','Node gap','range',0,50,1],['transEndFade','End fade','range',0,0.49,0.01],['transCurve','Curve','range',-2,2,0.05]]],
   ['Path shape', [['pathMode','Path','select',LN_OPT_PATH],['pathRough','Roughness','range',0,0.6,0.01],['pathDetail','Detail','range',1,6,1]]],
   ['Dash & animation', [['dashLen','Dash len','range',1,30,1],['dashGap','Dash gap','range',1,30,1],['flowDash','Flow dashes','bool'],
@@ -1521,7 +1547,7 @@ const LANE_PRESETS = {
   lightning: {name:'lightning', ov:{connMode:'knn',offColorMode:'single',offColor:[150,220,255],offStyle:'glow',offGlow:2.4,offW:1.4,offOpacity:0.9,offTwoWay:false,offEndGap:10,unoOn:false,transOn:false,pathMode:'fractal',pathRough:0.3,pathDetail:5}}
 };
 let lnPreset='galaxy01';
-function applyLanePreset(name){ let p=LANE_PRESETS[name]; if(!p)return; lnPreset=name; Object.assign(CFG.lanes, JSON.parse(JSON.stringify(p.ov))); lnNeedsBuild=true; showPage(); }
+function applyLanePreset(name){ let p=LANE_PRESETS[name]; if(!p)return; lnPreset=name; let ov=JSON.parse(JSON.stringify(p.ov)); pxToWorldLanes(ov, DATUM_REF); Object.assign(CFG.lanes, ov); lnNeedsBuild=true; showPage(); }   // preset laneGaps authored in px → world
 const GRID_SCHEMA = [
   ['Grid', [['on','Grid on','bool'],['type','Type','select',GRID_OPT_TYPE],['gridZ','Draw order','select',[['over','Over systems'],['under','Under systems']]],['color','Major color','color'],['opacity','Major opacity','range',0,1,0.01],['minorColor','Minor color','color'],['minorBright','Minor bright','range',0.2,2.5,0.05],['minorOpacity','Minor opacity','range',0,1,0.01],['weight','Weight','range',0.25,4,0.25],['majorStyle','Major style','select',GRID_OPT_STYLE],['minorStyle','Minor style','select',GRID_OPT_STYLE],['dashScale','Dash scale','range',0.3,4,0.1]]],
   ['Boundary (galaxy edge)', [['showBoundary','Boundary','bool'],['boundaryShape','Shape','select',[['circle','Circle'],['square','Square']]],['boundaryPad','Edge padding','range',-400,1200,10],['gridInset','Grid inset','range',0,800,10],['labelRingPad','Label ring','range',-200,300,5],['boundaryColor','Color','color'],['boundaryOpacity','Opacity','range',0,1,0.01],['clip','Clip grid to it','bool'],['showOrigin','Origin marker','bool']]],
