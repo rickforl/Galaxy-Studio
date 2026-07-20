@@ -65,7 +65,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '03';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.03: MOTION module — ship speed = world-rate (clicks/tick), physics-layer first brick]
+const BUILD_SEQ  = '04';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.04: projection absorb (boundary-B) — DATUM owns w2s/s2w; DRY the galaxy-view + grid projection]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -474,7 +474,7 @@ function drawLanes(camX,camY,camZoom){
   let px=(PANELW+width)/2, py=height/2, M=80;
   push(); blendMode(ADD);
   for(const L of laneList){ let A=galaxy[L.a], B=galaxy[L.b];
-    let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
+    let sA=DATUM.w2s(A.x,A.y,cx,cy,z,px,py), sB=DATUM.w2s(B.x,B.y,cx,cy,z,px,py), ax=sA.x,ay=sA.y,bx=sB.x,by=sB.y;
     if((ax<PANELW-M&&bx<PANELW-M)||(ax>width+M&&bx>width+M)||(ay<-M&&by<-M)||(ay>height+M&&by>height+M)) continue;   // cull off-screen
     lnDrawOne(L, ax,ay,bx,by, z); }
   pop(); blendMode(BLEND); drawingContext.setLineDash([]);
@@ -525,13 +525,13 @@ function drawTraffic(camX,camY,camZoom){
   for(const L of TC.layers){ if(!L.on) continue;
     if(L.kind==='smuggler'){ let pairs=trSmugglerPairs(L);
       for(let pi=0;pi<pairs.length;pi++){ let A=galaxy[pairs[pi][0]], B=galaxy[pairs[pi][1]];
-        let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
+        let sA=DATUM.w2s(A.x,A.y,cx,cy,z,px,py), sB=DATUM.w2s(B.x,B.y,cx,cy,z,px,py), ax=sA.x,ay=sA.y,bx=sB.x,by=sB.y;
         if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
         trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,pi), L, L.time||0, L.color, lodF, z, Math.hypot(B.x-A.x,B.y-A.y)); }
       continue; }
     for(let li=0;li<laneList.length;li++){ let lane=laneList[li]; if(lane.kind!==L.kind) continue;
       let A=galaxy[lane.a], B=galaxy[lane.b];
-      let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
+      let sA=DATUM.w2s(A.x,A.y,cx,cy,z,px,py), sB=DATUM.w2s(B.x,B.y,cx,cy,z,px,py), ax=sA.x,ay=sA.y,bx=sB.x,by=sB.y;
       if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
       trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,li), L, L.time||0, lnColor(lane,0), lodF, z, Math.hypot(B.x-A.x,B.y-A.y)); }
   }
@@ -674,7 +674,15 @@ const DATUM = (function(){
   function unit(){ return (CFG.datum && CFG.datum.distUnit) || 1; }   // dist_unit; default identity (1 unit = 1 world-unit)
   function worldToUnit(w){ return w / unit(); }            // world-units → dist_units
   function unitToWorld(u){ return u * unit(); }            // dist_units → world-units
-  return { mapPx, screenPx, unit, worldToUnit, unitToWorld, MIN_PX };
+  // ---- world <-> screen PROJECTION (boundary-B: the space/view module now owns it) ----
+  // screen = center + (cam + world) × zoom. ONE implementation; callers pass cam (cx,cy,z) and,
+  // optionally, the projection center (px,py). GRID passes its OWN cached center so bake buffers
+  // stay correct; galaxy-view callers omit it and get the live canvas center. Byte-identical to
+  // the inline formula it replaces — this is the seam a future WORLD-space consumer swaps.
+  function center(){ return { x:(PANELW+width)/2, y:height/2 }; }
+  function w2s(wx, wy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x: px+(cx+wx)*z, y: py+(cy+wy)*z }; }
+  function s2w(sx, sy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x:(sx-px)/z-cx, y:(sy-py)/z-cy }; }
+  return { mapPx, screenPx, unit, worldToUnit, unitToWorld, center, w2s, s2w, MIN_PX };
 })();
 
 // ============================================================================
@@ -710,12 +718,12 @@ const GRID = (function(){
   const LABEL_POS={ center:[0.5,0.5,'c','c',0,0], top:[0.5,0,'c','t',0,3], bottom:[0.5,1,'c','b',0,-3], left:[0,0.5,'l','c',3,0], right:[1,0.5,'r','c',-3,0], tl:[0,0,'l','t',3,3], tr:[1,0,'r','t',-3,3], bl:[0,1,'l','b',3,-3], br:[1,1,'r','b',-3,-3] };
   const POLAR_ZERO={ east:0, north:-90, west:180, south:90 };
   function setCam(camX,camY,camZoom){ _cx=(camX!==undefined)?camX:cam.x; _cy=(camY!==undefined)?camY:cam.y; _z=(camZoom!==undefined)?camZoom:cam.zoom; _px=(PANELW+width)/2; _py=height/2; _bx0=PANELW;_by0=0;_bx1=width;_by1=height; }
-  function S(wx,wy){ return { x:_px+(_cx+wx)*_z, y:_py+(_cy+wy)*_z }; }            // world -> screen (same projection as the galaxy view)
-  function VIS(){ return { x0:(_bx0-_px)/_z-_cx, x1:(_bx1-_px)/_z-_cx, y0:(_by0-_py)/_z-_cy, y1:(_by1-_py)/_z-_cy }; }   // visible world rect within the target's pixel bounds
+  function S(wx,wy){ return DATUM.w2s(wx,wy,_cx,_cy,_z,_px,_py); }            // world -> screen (same projection as the galaxy view)
+  function VIS(){ let p0=DATUM.s2w(_bx0,_by0,_cx,_cy,_z,_px,_py), p1=DATUM.s2w(_bx1,_by1,_cx,_cy,_z,_px,_py); return { x0:p0.x, x1:p1.x, y0:p0.y, y1:p1.y }; }   // visible world rect within the target's pixel bounds
   function RAD(){ return CFG.gen.radius; }                                       // grid coordinate radius = the galaxy radius
   function iso2s(wx,wy,wz){ let a=G.isoRot*Math.PI/180, rx=wx*Math.cos(a)-wy*Math.sin(a), ry=wx*Math.sin(a)+wy*Math.cos(a);
     let ix=(rx-ry)*ISO_COS, iy=(rx+ry)*ISO_SIN*G.isoPitch-(wz||0);
-    return { x:_px+(_cx+ix)*_z, y:_py+(_cy+iy)*_z }; }
+    return DATUM.w2s(ix,iy,_cx,_cy,_z,_px,_py); }
   function proj(wx,wy){ return G.type==='iso' ? iso2s(wx,wy,0) : S(wx,wy); }
   function drawProjBoundary(r,colStr,lw){ let dc=_P.drawingContext; dc.strokeStyle=colStr; dc.lineWidth=lw; dc.beginPath();
     if(G.boundaryShape==='square'){ let p=[[-r,-r],[r,-r],[r,r],[-r,r]]; for(let i=0;i<4;i++){ let s=iso2s(p[i][0],p[i][1],0); i?dc.lineTo(s.x,s.y):dc.moveTo(s.x,s.y); } dc.closePath(); }
@@ -881,9 +889,9 @@ const GRID = (function(){
   }
   // ---- coordinates readout (ported from grid_exhibit): a measurement HUD over the frame ----
   function s2w(sx,sy){ let z=_z;                                                 // screen -> world (inverse of the active projection)
-    if(G.type==='iso'){ let ix=(sx-_px)/z-_cx, iy=(sy-_py)/z-_cy, A=ix/ISO_COS, B=iy/(ISO_SIN*G.isoPitch), rx=(A+B)/2, ry=(B-A)/2, a=G.isoRot*Math.PI/180;
+    if(G.type==='iso'){ let raw=DATUM.s2w(sx,sy,_cx,_cy,z,_px,_py), ix=raw.x, iy=raw.y, A=ix/ISO_COS, B=iy/(ISO_SIN*G.isoPitch), rx=(A+B)/2, ry=(B-A)/2, a=G.isoRot*Math.PI/180;
       return { x: rx*Math.cos(a)+ry*Math.sin(a), y: -rx*Math.sin(a)+ry*Math.cos(a) }; }
-    return { x:(sx-_px)/z-_cx, y:(sy-_py)/z-_cy }; }
+    return DATUM.s2w(sx,sy,_cx,_cy,z,_px,_py); }
   function axialRound(q,r){ let x=q, z=r, y=-x-z, rx=Math.round(x), ry=Math.round(y), rz=Math.round(z);   // cube rounding -> nearest hex
     let dx=Math.abs(rx-x), dy=Math.abs(ry-y), dz=Math.abs(rz-z);
     if(dx>dy && dx>dz) rx=-ry-rz; else if(dy>dz) ry=-rx-rz; else rz=-rx-ry; return { q:rx, r:rz }; }
