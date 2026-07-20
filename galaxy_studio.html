@@ -65,7 +65,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '02';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.02: px→world FLIP of ship-size/gap + lane-gap + first migration test]
+const BUILD_SEQ  = '03';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.03: MOTION module — ship speed = world-rate (clicks/tick), physics-layer first brick]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -495,13 +495,13 @@ function trafColor(s,L,laneCol){ if(L.style==='economy') return s.crim?[255,72,7
 function trDot(x,y,r,c,a){ let dc=drawingContext; dc.fillStyle=rgba(c,a); dc.beginPath(); dc.arc(x,y,r,0,TWO_PI); dc.fill(); }
 function trGlow(x,y,r,c,a){ let dc=drawingContext, g=dc.createRadialGradient(x,y,0,x,y,r); g.addColorStop(0,rgba(c,a)); g.addColorStop(1,rgba(c,0)); dc.fillStyle=g; dc.beginPath(); dc.arc(x,y,r,0,TWO_PI); dc.fill(); }
 function trTri(x,y,ang,r,c){ let dc=drawingContext; dc.save(); dc.translate(x,y); dc.rotate(ang); dc.fillStyle=rgba(c,0.95); dc.beginPath(); dc.moveTo(r,0); dc.lineTo(-r*0.72,r*0.62); dc.lineTo(-r*0.72,-r*0.62); dc.closePath(); dc.fill(); dc.restore(); }
-function trShipXY(a,b,s,t,gap){ let p=((s.base+t*s.spd)%1+1)%1, frac=s.dir>0?p:1-p, dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1, nx=-dy/len, ny=dx/len, g=(s.off||0)*gap;
+function trShipXY(a,b,s,t,gap,wlen){ let p=MOTION.progress(s.base, s.spd, wlen, t), frac=s.dir>0?p:1-p, dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1, nx=-dy/len, ny=dx/len, g=(s.off||0)*gap;   // progress = MOTION law (world-rate); len stays SCREEN for the perpendicular offset
   return { x:a.x+dx*frac+nx*g, y:a.y+dy*frac+ny*g, ang:Math.atan2(dy*s.dir,dx*s.dir), frac, dir:s.dir, u:{x:dx/len,y:dy/len} }; }
-function trafRenderShips(a,b, ships, L, t, laneCol, lodF, z){
-  if(z===undefined) z=cam.zoom||1;                                                                             // MAP-frame ship sizing needs the current zoom
+function trafRenderShips(a,b, ships, L, t, laneCol, lodF, z, wlen){
+  if(z===undefined) z=cam.zoom||1;                                                                             // MAP-frame ship sizing needs the current zoom; wlen = lane WORLD length for the MOTION law
   let sz=DATUM.mapPx(L.size, z, 0), st=L.style, gap=DATUM.mapPx(L.gap||0, z, 0), fade=L.fade||0, dc=drawingContext;   // ship size + gap = MAP frame (world × zoom)
   let lim=(lodF==null||lodF>=1)?ships.length:Math.max(1,Math.round(ships.length*lodF));   // LOD: fewer ships when zoomed out
-  for(let i=0;i<lim;i++){ let s=ships[i], p=trShipXY(a,b,s,t,gap), c=trafColor(s,L,laneCol);
+  for(let i=0;i<lim;i++){ let s=ships[i], p=trShipXY(a,b,s,t,gap,wlen), c=trafColor(s,L,laneCol);
     let al=1; if(fade>0){ if(p.frac<fade) al=p.frac/fade; else if(p.frac>1-fade) al=(1-p.frac)/fade; }        // fade at the ends
     if(st==='triangle'){ trTri(p.x,p.y,p.ang,4.4*sz,c); }
     else if(st==='comet'){ let tl=14*sz, tx=p.x-p.u.x*p.dir*tl, ty=p.y-p.u.y*p.dir*tl, g=dc.createLinearGradient(tx,ty,p.x,p.y); g.addColorStop(0,rgba(c,0)); g.addColorStop(1,rgba(c,0.6*al)); dc.strokeStyle=g; dc.lineWidth=1.8*sz; dc.lineCap='round'; dc.beginPath(); dc.moveTo(tx,ty); dc.lineTo(p.x,p.y); dc.stroke(); trDot(p.x,p.y,1.7*sz,[255,255,255],0.9*al); trGlow(p.x,p.y,5*sz,c,0.5*al); }
@@ -527,13 +527,13 @@ function drawTraffic(camX,camY,camZoom){
       for(let pi=0;pi<pairs.length;pi++){ let A=galaxy[pairs[pi][0]], B=galaxy[pairs[pi][1]];
         let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
         if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
-        trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,pi), L, L.time||0, L.color, lodF, z); }
+        trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,pi), L, L.time||0, L.color, lodF, z, Math.hypot(B.x-A.x,B.y-A.y)); }
       continue; }
     for(let li=0;li<laneList.length;li++){ let lane=laneList[li]; if(lane.kind!==L.kind) continue;
       let A=galaxy[lane.a], B=galaxy[lane.b];
       let ax=px+(cx+A.x)*z, ay=py+(cy+A.y)*z, bx=px+(cx+B.x)*z, by=py+(cy+B.y)*z;
       if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
-      trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,li), L, L.time||0, lnColor(lane,0), lodF, z); }
+      trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,li), L, L.time||0, lnColor(lane,0), lodF, z, Math.hypot(B.x-A.x,B.y-A.y)); }
   }
   pop(); blendMode(BLEND);
 }
@@ -554,7 +554,7 @@ function drawTrafficEditGrid(idx){
     let A={x:cell.x+cell.w*0.16,y:cell.y+cell.h*0.55}, B={x:cell.x+cell.w*0.84,y:cell.y+cell.h*0.55};
     push(); blendMode(ADD);
     if(L.kind!=='smuggler'){ lnBreathe=1; lnDrawOne({kind:L.kind,a:0,b:1,col:[120,190,255],col2:[255,180,120],r:0.5,td:null}, A.x,A.y,B.x,B.y, DATUM_REF); }   // sample lane at the reference zoom (canonical preview look)
-    let ps=L.style; L.style=cell.style; trafRenderShips(A,B, trafEditShips, L, L.time||0, [120,190,255], 1, DATUM_REF); L.style=ps;                        // ships at the reference zoom (canonical preview look)
+    let ps=L.style; L.style=cell.style; trafRenderShips(A,B, trafEditShips, L, L.time||0, [120,190,255], 1, DATUM_REF, MOTION.scale()); L.style=ps;         // ships at ref zoom + nominal lane length (canonical preview)
     pop(); blendMode(BLEND);
     noStroke(); fill(230,238,255,235); circle(A.x,A.y,5); circle(B.x,B.y,5);
     dc.restore();
@@ -675,6 +675,30 @@ const DATUM = (function(){
   function worldToUnit(w){ return w / unit(); }            // world-units → dist_units
   function unitToWorld(u){ return u * unit(); }            // dist_units → world-units
   return { mapPx, screenPx, unit, worldToUnit, unitToWorld, MIN_PX };
+})();
+
+// ============================================================================
+//  MOTION — the ship-motion PHYSICS law.  SECOND module out of the monolith, and
+//  the first brick of the physics/asset layer (DATUM = the measurement layer).
+//  A cross-dimension RATE lives HERE, not inside a dimension (WORLD principle 5):
+//  ship speed = clicks/tick (world-units per time) is an ASSET value fed to a LAW,
+//  never a space or time setting. The law: progress along a lane advances at
+//  worldSpeed / laneWorldLength — so every ship shares ONE world speed and long
+//  lanes take proportionally longer. This kills the old "fraction-of-lane per
+//  frame" frame, where lane length AND zoom made ships move faster.
+//  CLOCK: cosmetic traffic rides the realtime/frame clock today (t = L.time); the
+//  SAME law becomes clicks/TICK (deterministic, fixed-timestep) when WORLD TIME
+//  lands. Pure math, no p5/draw — lifts to a standalone file with the datum/physics.
+// ============================================================================
+const MOTION = (function(){
+  const K = 0.22;                                          // feel-calibration: scale ≈ a typical lane length, so "speed 1" ≈ the pre-change crossing time; galaxy-size-invariant
+  function scale(){ return (CFG.gen && CFG.gen.radius ? CFG.gen.radius : 1200) * K; }   // world-units of lane that one unit of (clock × speed) covers
+  function progress(base, mult, laneWorldLen, t){          // [0,1) progress of a ship along a lane at clock time t (mult = the ship's speed multiplier)
+    let len = (laneWorldLen>1e-6) ? laneWorldLen : scale();   // fallback = scale() -> unit rate (safe if a caller omits the world length)
+    let d = (t * mult * scale()) / len;                   // world distance travelled ÷ lane length = fraction. The ÷len IS the world-rate fix: long lanes take longer, short lanes less.
+    return ((base + d) % 1 + 1) % 1;
+  }
+  return { progress, scale };
 })();
 
 const GRID = (function(){
