@@ -65,7 +65,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260719';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '05';           // per-day build sequencer — bump each build (01, 02, 03, ...)
+const BUILD_SEQ  = '06';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.06: export carries build id]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -1176,7 +1176,7 @@ function enterFullscreen(){ applyFullscreen(true); let el=document.documentEleme
 function exitFullscreen(){ let inFs=!!document.fullscreenElement; applyFullscreen(false); if(inFs && document.exitFullscreen){ try{ document.exitFullscreen().catch(()=>{}); }catch(e){} } }
 const CFG_KEY='galaxy_studio_cfg';
 let lastSaved='', lastSaveCheck=0;
-function studioSnapshot(){ return Object.assign({}, CFG, { view:{ camX:cam.x, camY:cam.y, camZoom:cam.zoom, preset:ACTIVE_PRESET } }); }   // full studio state: all CFG + framing + preset
+function studioSnapshot(){ return Object.assign({}, CFG, { build: BUILD_ID, view:{ camX:cam.x, camY:cam.y, camZoom:cam.zoom, preset:ACTIVE_PRESET } }); }   // full studio state: build id + all CFG + framing + preset. `build` is metadata — applySnapshot ignores it (only merges CFG sections + view), so it round-trips harmlessly.
 function applySnapshot(c){                                  // merge a snapshot into CFG + view (shared by import + localStorage load)
   for(const sec in CFG){ if(c[sec]) Object.assign(CFG[sec], c[sec]); }
   if(c.view){ if(typeof c.view.camX==='number') cam.x=c.view.camX; if(typeof c.view.camY==='number') cam.y=c.view.camY; if(typeof c.view.camZoom==='number') cam.zoom=c.view.camZoom;
