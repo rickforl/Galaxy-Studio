@@ -64,14 +64,15 @@
 // ===================================================================
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
-const BUILD_DATE = '20260719';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '06';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.06: export carries build id]
+const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
+const BUILD_SEQ  = '01';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.01: DATUM measurement-frame module — behavior-preserving extraction]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
 // except the plasma/filament noise textures, which are baked once and tinted/faded live).
 // namespaced config — one source of truth every page writes and the view reads (Phase 0)
 let CFG = {
+  datum: { distUnit: 1 },   // the measurement datum: 1 dist_unit = 1 world-unit (IDENTITY), redefinable later ("1 of [X] = 1 unit"). Consumed by the DATUM module.
   sun: {
     // GLOBAL
     previewR: 45, edge: 0.30, rot: 1.0, lodOn: false, bg: true, sunColor: [255, 180, 90],
@@ -443,10 +444,10 @@ function lnDrawOne(L, ax,ay,bx,by, z){
   else { st=C.offStyle; w=C.offW; op=C.offOpacity; glow=C.offGlow; tw=C.offTwoWay; lg=C.offLaneGap; eg=C.offEndGap; ef=C.offEndFade; cv=C.offCurve; }
   op*=lnBreathe;
   let dx=bx-ax, dy=by-ay, len=Math.hypot(dx,dy); if(len<2) return; let ux=dx/len, uy=dy/len, nx=-uy, ny=ux;
-  let gap=eg*z; ax+=ux*gap; ay+=uy*gap; bx-=ux*gap; by-=uy*gap;
+  let gap=DATUM.mapPx(eg,z,0); ax+=ux*gap; ay+=uy*gap; bx-=ux*gap; by-=uy*gap;   // node gap = MAP frame (world × zoom); floor 0 keeps it byte-identical to eg*z
   if(Math.hypot(bx-ax,by-ay)<2) return;
   let td=(C.pathMode!=='straight')?L.td:null;
-  if(tw){ let off=lg*(0.6+0.8*L.r);
+  if(tw){ let off=DATUM.screenPx(lg)*(0.6+0.8*L.r);   // lane gap = SCREEN frame today → flips to mapPx in Step B
     lnBeam(ax,ay,bx,by, off, td, len, ux,uy,nx,ny, lnColor(L,0), st,w,op,glow,ef,cv);
     lnBeam(ax,ay,bx,by,-off, td, len, ux,uy,nx,ny, lnColor(L,1), st,w,op,glow,ef,cv);
   } else lnBeam(ax,ay,bx,by, 0, td, len, ux,uy,nx,ny, lnColor(L,0), st,w,op,glow,ef,cv);
@@ -483,7 +484,7 @@ function trTri(x,y,ang,r,c){ let dc=drawingContext; dc.save(); dc.translate(x,y)
 function trShipXY(a,b,s,t,gap){ let p=((s.base+t*s.spd)%1+1)%1, frac=s.dir>0?p:1-p, dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1, nx=-dy/len, ny=dx/len, g=(s.off||0)*gap;
   return { x:a.x+dx*frac+nx*g, y:a.y+dy*frac+ny*g, ang:Math.atan2(dy*s.dir,dx*s.dir), frac, dir:s.dir, u:{x:dx/len,y:dy/len} }; }
 function trafRenderShips(a,b, ships, L, t, laneCol, lodF){
-  let sz=L.size, st=L.style, gap=(L.gap||0), fade=L.fade||0, dc=drawingContext;
+  let sz=DATUM.screenPx(L.size), st=L.style, gap=DATUM.screenPx(L.gap||0), fade=L.fade||0, dc=drawingContext;   // ship size + gap = SCREEN frame today → flip to mapPx (needs zoom) in Step B
   let lim=(lodF==null||lodF>=1)?ships.length:Math.max(1,Math.round(ships.length*lodF));   // LOD: fewer ships when zoomed out
   for(let i=0;i<lim;i++){ let s=ships[i], p=trShipXY(a,b,s,t,gap), c=trafColor(s,L,laneCol);
     let al=1; if(fade>0){ if(p.frac<fade) al=p.frac/fade; else if(p.frac>1-fade) al=(1-p.frac)/fade; }        // fade at the ends
@@ -630,6 +631,37 @@ function drawTrafficPreview(){
 // ---------- Grid: the galaxy's coordinate frame (ported from grid_exhibit; boundary radius = CFG.gen.radius) ----------
 const GRID_OPT_TYPE=[['square','Square (Cartesian)'],['polar','Polar (rings + spokes)'],['hex','Hex tiles'],['iso','Isometric (3D floor)']];
 const GRID_OPT_STYLE=[['solid','Solid'],['dashed','Dashed'],['dotted','Dotted'],['dashdot','Dash-dot']];
+// ============================================================================
+//  DATUM — the measurement-frame module.  FIRST extraction from the monolith:
+//  pure math, no p5 state, no draw calls; designed to LIFT to a standalone file
+//  (and later an ESM module deferring to WORLD-space) with NO call-site changes.
+//  Ends the ad-hoc "some sizes are px, some are world" conflation via TWO frames:
+//    · mapPx    — MAP frame: world-units that SCALE with zoom (physical galaxy
+//                 things: node gaps, and — after Step B — ship size/gap, lane gap).
+//                 Floored to a screen-min-px so they never shrink sub-pixel.
+//    · screenPx — SCREEN frame: constant px, zoom-independent (HUD/readability:
+//                 line weights, labels, lane width).
+//  unit() = the dist_unit datum (CFG.datum.distUnit); default 1 unit = 1 world-unit
+//  (IDENTITY). The seam a future WORLD-space consumer plugs into.
+//  STEP A (this build): behavior-PRESERVING — every call site routes through here
+//  at its CURRENT frame, so rendering is byte-identical. The px→world FLIP of
+//  ship-size/gap + lane-gap (screenPx→mapPx) is STEP B, paired with the export
+//  migration (default zoom 0.35 ≠ 1 → old configs must be remapped, not silently
+//  re-rendered).
+// ============================================================================
+const DATUM = (function(){
+  const MIN_PX = 1.5;                                     // screen-min-px floor for map-frame elements (used by the Step-B flip)
+  function mapPx(worldVal, zoom, floorPx){                // MAP frame: world × zoom, floored so it never goes sub-pixel. Pass floorPx=0 to opt out.
+    let px = worldVal * zoom, f = (floorPx===undefined) ? MIN_PX : floorPx;
+    return f>0 ? Math.max(f, px) : px;
+  }
+  function screenPx(v){ return v; }                        // SCREEN frame: constant px, zoom-independent (identity — the datum for HUD sizes)
+  function unit(){ return (CFG.datum && CFG.datum.distUnit) || 1; }   // dist_unit; default identity (1 unit = 1 world-unit)
+  function worldToUnit(w){ return w / unit(); }            // world-units → dist_units
+  function unitToWorld(u){ return u * unit(); }            // dist_units → world-units
+  return { mapPx, screenPx, unit, worldToUnit, unitToWorld, MIN_PX };
+})();
+
 const GRID = (function(){
   let G, _cx=0,_cy=0,_z=1,_px=0,_py=0;                                          // cam + projection state, set per draw()
   let coWp=null, coSelSys=null, coSelSysId=-1;                                  // readout state: waypoint + hovered system
