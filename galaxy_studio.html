@@ -65,7 +65,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '04';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.04: projection absorb (boundary-B) — DATUM owns w2s/s2w; DRY the galaxy-view + grid projection]
+const BUILD_SEQ  = '05';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.05: min-px floor on ship size (anti-vanish when zoomed out); gaps stay unfloored]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -499,7 +499,7 @@ function trShipXY(a,b,s,t,gap,wlen){ let p=MOTION.progress(s.base, s.spd, wlen, 
   return { x:a.x+dx*frac+nx*g, y:a.y+dy*frac+ny*g, ang:Math.atan2(dy*s.dir,dx*s.dir), frac, dir:s.dir, u:{x:dx/len,y:dy/len} }; }
 function trafRenderShips(a,b, ships, L, t, laneCol, lodF, z, wlen){
   if(z===undefined) z=cam.zoom||1;                                                                             // MAP-frame ship sizing needs the current zoom; wlen = lane WORLD length for the MOTION law
-  let sz=DATUM.mapPx(L.size, z, 0), st=L.style, gap=DATUM.mapPx(L.gap||0, z, 0), fade=L.fade||0, dc=drawingContext;   // ship size + gap = MAP frame (world × zoom)
+  let sz=DATUM.mapPx(L.size, z), st=L.style, gap=DATUM.mapPx(L.gap||0, z, 0), fade=L.fade||0, dc=drawingContext;   // ship size = MAP frame, floored (MIN_PX anti-vanish); gap = MAP frame, unfloored (0) so it may collapse when zoomed out
   let lim=(lodF==null||lodF>=1)?ships.length:Math.max(1,Math.round(ships.length*lodF));   // LOD: fewer ships when zoomed out
   for(let i=0;i<lim;i++){ let s=ships[i], p=trShipXY(a,b,s,t,gap,wlen), c=trafColor(s,L,laneCol);
     let al=1; if(fade>0){ if(p.frac<fade) al=p.frac/fade; else if(p.frac>1-fade) al=(1-p.frac)/fade; }        // fade at the ends
@@ -653,7 +653,7 @@ const GRID_OPT_STYLE=[['solid','Solid'],['dashed','Dashed'],['dotted','Dotted'],
 //  Ends the ad-hoc "some sizes are px, some are world" conflation via TWO frames:
 //    · mapPx    — MAP frame: world-units that SCALE with zoom (physical galaxy
 //                 things: node gaps, and — after Step B — ship size/gap, lane gap).
-//                 Floored to a screen-min-px so they never shrink sub-pixel.
+//                 Optional screen-min-px floor (floorPx): ship SIZE uses it (anti-vanish); gaps opt out (floor 0) so they may collapse when zoomed out.
 //    · screenPx — SCREEN frame: constant px, zoom-independent (HUD/readability:
 //                 line weights, labels, lane width).
 //  unit() = the dist_unit datum (CFG.datum.distUnit); default 1 unit = 1 world-unit
@@ -665,7 +665,7 @@ const GRID_OPT_STYLE=[['solid','Solid'],['dashed','Dashed'],['dotted','Dotted'],
 //  re-rendered).
 // ============================================================================
 const DATUM = (function(){
-  const MIN_PX = 1.5;                                     // screen-min-px floor for map-frame elements (used by the Step-B flip)
+  const MIN_PX = 0.5;                                     // ship base-size floor (px). sz = L.size×zoom is already px, so this IS pixels. Kept BELOW the smallest authored base (~0.6px) so it ONLY prevents sub-pixel vanish when zoomed out — never enlarges ships at the authored zoom.
   function mapPx(worldVal, zoom, floorPx){                // MAP frame: world × zoom, floored so it never goes sub-pixel. Pass floorPx=0 to opt out.
     let px = worldVal * zoom, f = (floorPx===undefined) ? MIN_PX : floorPx;
     return f>0 ? Math.max(f, px) : px;
