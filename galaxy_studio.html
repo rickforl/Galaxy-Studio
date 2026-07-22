@@ -1,8 +1,9 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><title>Galaxy Studio</title>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"><title>Galaxy Studio</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
 <style>
-  html,body{margin:0;padding:0;overflow:hidden;background:#05060a;font-family:'Consolas','Monaco',monospace;}
+  html,body{margin:0;padding:0;overflow:hidden;overscroll-behavior:none;background:#05060a;font-family:'Consolas','Monaco',monospace;}
+  canvas{touch-action:none;-webkit-tap-highlight-color:transparent;}   /* mobile: the canvas handles its own pan/pinch — stop the browser scrolling/zooming the page */
   #panel{position:fixed;top:31px;left:0;width:250px;max-height:calc(100vh - 31px);overflow-y:auto;
     background:rgba(8,12,20,0.92);border-right:1px solid #2a3a58;padding:8px 10px 40px;
     color:#b9c8e4;font:11px 'Consolas',monospace;z-index:10;box-sizing:border-box;}
@@ -67,7 +68,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '08';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.08: config load regenerates the galaxy systems (afterConfigChange -> regenerate); fixes stale-galaxy on import/preset]
+const BUILD_SEQ  = '09';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.09: mobile touch — 1-finger pan, 2-finger pinch-zoom, tap waypoint; viewport meta + canvas touch-action]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -1246,6 +1247,38 @@ function mouseReleased(){   // a click (not a drag) drops the grid waypoint — 
   gPressPt=null; }
 function mouseDragged(){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; lastInteract=millis(); } }
 function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); lastInteract=millis(); return false; } }
+// ---------- Touch (mobile): 1-finger pan, 2-finger pinch-zoom, tap = grid waypoint. Mirrors the mouse handlers; returning false = preventDefault (no page scroll/zoom, no synthesized mouse events -> no double-handling) ----------
+let _tPrev=null, _tPinch=0, _tStart=null, _tMoved=false, _tActive=false;
+function touchStarted(){
+  if(!touches.length) return;
+  let t0=touches[0];
+  _tActive = (viewMode==='galaxy' && t0.x>PANELW);          // does this gesture belong to the galaxy canvas? (not the panel / topbar)
+  if(!_tActive) return;                                     // panel area -> let the DOM handle scroll / control taps natively
+  if(touches.length>=2){ _tPinch=Math.hypot(touches[0].x-touches[1].x, touches[0].y-touches[1].y); _tPrev=null; }
+  else { _tPrev={x:t0.x,y:t0.y}; _tStart={x:t0.x,y:t0.y}; _tMoved=false; _tPinch=0; }
+  lastInteract=millis(); return false;
+}
+function touchMoved(){
+  if(!_tActive || !touches.length) return;
+  if(touches.length>=2){                                    // pinch -> zoom (same multiplicative model as the wheel)
+    let d=Math.hypot(touches[0].x-touches[1].x, touches[0].y-touches[1].y);
+    if(_tPinch>0) cam.zoom=constrain(cam.zoom*(d/_tPinch), 0.05, 6);
+    _tPinch=d; _tPrev=null; _tMoved=true;
+  } else if(_tPrev){                                         // drag -> pan (world-space delta, like mouseDragged)
+    let t0=touches[0];
+    cam.x += (t0.x-_tPrev.x)/cam.zoom; cam.y += (t0.y-_tPrev.y)/cam.zoom;
+    _tPrev={x:t0.x,y:t0.y};
+    if(_tStart && Math.hypot(t0.x-_tStart.x, t0.y-_tStart.y)>8) _tMoved=true;
+  }
+  lastInteract=millis(); return false;
+}
+function touchEnded(){
+  if(_tActive && _tStart && !_tMoved && CFG.grid.coWaypoint && _tStart.x>PANELW && (activePage==='grid' || (viewMode==='galaxy' && CFG.grid.on)))
+    GRID.dropWaypoint(_tStart.x, _tStart.y);                // tap (no drag) = drop the grid waypoint (mirrors mouseReleased)
+  if(!touches.length){ _tActive=false; _tPrev=null; _tStart=null; _tMoved=false; _tPinch=0; }                 // all fingers up -> reset
+  else if(touches.length===1 && _tActive){ _tPrev={x:touches[0].x,y:touches[0].y}; _tStart=null; _tPinch=0; }  // 2->1 finger -> resume panning from the remaining finger
+  return _tActive ? false : undefined;
+}
 function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); }
 function updateModeBtn(){ let b=document.getElementById('mode-btn'); if(b) b.innerHTML = (viewMode==='options') ? '&#9654; VIEW GALAXY' : '&#9664; OPTIONS'; }
 function applyFullscreen(on){                                                 // app-side: hide the UI + let the galaxy fill the window
