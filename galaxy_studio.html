@@ -67,7 +67,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '07';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.07: "Default" preset = authored default galaxy (hardcoded export) + applied on fresh load / ?reset]
+const BUILD_SEQ  = '08';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.08: config load regenerates the galaxy systems (afterConfigChange -> regenerate); fixes stale-galaxy on import/preset]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -232,7 +232,7 @@ function setup(){
   document.addEventListener('fullscreenchange', ()=>{ if(!document.fullscreenElement && fullscreen) applyFullscreen(false); });   // Esc / native exit -> restore the UI
   document.getElementById('build-pill').textContent = BUILD_ID;
   loadFpsRecords();
-  regenerate();                 // build the initial galaxy
+  // initial galaxy is already built: every branch above (reset / loadState / fresh-default) applies a snapshot, and afterConfigChange regenerates the systems
   updateModeBtn();
 }
 function windowResized(){ resizeCanvas(windowWidth, windowHeight); invalidateStars(); }
@@ -1277,6 +1277,7 @@ function applySnapshot(c){                                  // merge a snapshot 
     if(c.view.preset && PRESETS[c.view.preset]) ACTIVE_PRESET=c.view.preset; }   // display only — never applyPreset (would clobber the loaded sun values)
 }
 function afterConfigChange(){                               // re-bake everything + sync the UI after a snapshot is applied
+  regenerate();                                             // rebuild the galaxy SYSTEMS from the loaded gen (seed/count): import / preset / load now updates the systems, not just the styling. Before this, systems stayed stale until a reload or a Galaxy-Gen change.
   invalidateSunSprites(); invalidateBackdrop(); sfNeedGen=true; sfDirty=true; lnNeedsBuild=true;
   let tag=document.getElementById('preset-tag'); if(tag) tag.textContent='· '+(PRESET_LABELS[ACTIVE_PRESET]||ACTIVE_PRESET);
   showPage();
