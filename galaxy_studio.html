@@ -48,6 +48,8 @@
   <span id="build-pill">&mdash;</span>
   <button id="mode-btn">&#9654; VIEW GALAXY</button>
   <button id="fs-btn" title="Fullscreen — Esc exits · i toggles the info readout">&#9974; Fullscreen</button>
+  <select id="preset-select" title="Load a galaxy preset"
+    style="margin-left:auto;background:#16233b;color:#cdd9ef;border:1px solid #3a5a8c;font:11px 'Consolas',monospace;padding:3px 8px;cursor:pointer;"><option value="">Presets &#9662;</option></select>
   <span id="fps-pill" title="click for FPS records">FPS &mdash;</span>
   <input id="export-name" type="text" value="galaxy_cfg.json" title="Export filename" spellcheck="false"
     style="width:120px;background:#0c1018;color:#cdd6e4;border:1px solid #2a3550;border-radius:4px;font:inherit;font-size:11px;padding:2px 5px;">
@@ -65,7 +67,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '05';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.05: min-px floor on ship size (anti-vanish when zoomed out); gaps stay unfloored]
+const BUILD_SEQ  = '06';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.06: top-bar galaxy PRESETS dropdown + "Default" preset (in-code defaults; more to be authored)]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -222,6 +224,7 @@ function setup(){
   document.getElementById('mode-btn').onclick   = toggleMode;
   document.getElementById('export-btn').onclick = exportCFG;
   document.getElementById('import-btn').onclick = () => document.getElementById('import-file').click();
+  { let ps=document.getElementById('preset-select'); if(ps) ps.onchange = e=>{ if(e.target.value) applyGalaxyPreset(e.target.value); }; buildPresetMenu(); }   // top-bar galaxy presets (dropdown shows the picked tier)
   document.getElementById('import-file').onchange = (e) => { if (e.target.files[0]) importCFG(e.target.files[0]); };
   document.getElementById('fps-pill').onclick = toggleFpsSheet;
   document.getElementById('fs-btn').onclick = enterFullscreen;
@@ -1292,6 +1295,27 @@ function importCFG(file){
   rd.onload=()=>{ try{ applySnapshot(JSON.parse(rd.result)); afterConfigChange(); autoSave(true); }
     catch(err){ try{ alert('Bad config JSON: '+err.message); }catch(_){ console.warn('Bad config JSON:', err.message); } } };
   rd.readAsText(file);
+}
+
+// ---------- Galaxy presets (top-bar dropdown) ----------
+// Selecting an entry applies it like Import (applySnapshot -> re-bake). Entries may be a FULL
+// exported snapshot OR a PARTIAL override (only the sections/keys listed are merged; the rest is
+// preserved). DEFAULT_SNAPSHOT is captured ONCE at load — before any localStorage or preset apply —
+// so it is a faithful copy of the app's in-code DEFAULT config (also what a fresh visitor with no
+// saved config gets). Author more presets as extra entries; the dropdown rebuilds from the keys.
+const DEFAULT_SNAPSHOT = JSON.parse(JSON.stringify(studioSnapshot()));   // the in-code defaults, frozen at load
+const GALAXY_PRESETS = {
+  'Default': DEFAULT_SNAPSHOT,
+};
+function applyGalaxyPreset(key){                             // apply a hardcoded preset like an import (deep-copy so migrateSnapshot can't mutate the stored preset)
+  let c = GALAXY_PRESETS[key]; if(!c) return;
+  applySnapshot(JSON.parse(JSON.stringify(c))); afterConfigChange(); autoSave(true);
+}
+function buildPresetMenu(){                                  // (re)build the dropdown options from GALAXY_PRESETS keys
+  let sel=document.getElementById('preset-select'); if(!sel) return;
+  sel.innerHTML='';
+  let ph=document.createElement('option'); ph.value=''; ph.textContent='Presets ▾'; sel.appendChild(ph);
+  for(const k in GALAXY_PRESETS){ let o=document.createElement('option'); o.value=k; o.textContent=k; sel.appendChild(o); }
 }
 
 // ---------- FPS counter + persistent record sheet ----------
