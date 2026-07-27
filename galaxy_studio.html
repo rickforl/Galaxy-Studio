@@ -68,7 +68,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '10';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.10: WORLD units seam — UNITS module + WORLD_SPEC anchor + world-Y-up/ENU convention (projection, star matrix, backdrop, previews, readout all flipped)]
+const BUILD_SEQ  = '11';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.11: Phase 2a — port FIXPT (exact-BigInt fixedpoint) + COORD (coordinateDb records/groups/placement) modules, additive; no behavior change yet]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -733,6 +733,71 @@ const UNITS = (function(){
   const clicksToPixels = (clicks, scale)=>clicks*scale;                         // scale = pixels-per-click (the zoom)
   const pixelsToClicks = (px, scale)=>px/scale;
   return { worldToClicks, clicksToWorld, gridToClicks, clicksToGrid, gridCellOf, snapToGridCenter, clicksToPixels, pixelsToClicks };
+})();
+
+// ============================================================================
+//  FIXPT — exact fixed-point core (ported from WORLD space.fixedpoint.v01 +
+//  constants; spec WORLD_SPEC). A coordinate is stored as an exact BigInt count of
+//  HUNDREDTHS of a click (0.01 resolution, banker's rounding). BigInt so it never
+//  loses precision at galaxy scale: a system authored in tiny local clicks lands
+//  EXACTLY at 10^15 clicks out. Number<->canonical only at the boundary (and only
+//  for SMALL local values, per the precision contract); exact BigInt add/sub between.
+//  Position = {x,y,z} BigInt; galaxy_studio is 2D so z stays 0.
+// ============================================================================
+const FIXPT = (function(){
+  const HUNDREDTHS = 100;                                              // 1 click = 100 hundredths (0.01 floor)
+  function roundHalfEven(x){                                          // banker's rounding (half-to-even) — unbiased, determinism-safe
+    let lo=Math.floor(x), f=x-lo;
+    if(f<0.5) return lo; if(f>0.5) return lo+1;
+    return lo%2===0 ? lo : lo+1;
+  }
+  const cFrom = (real)=>BigInt(roundHalfEven(real*HUNDREDTHS));       // real clicks -> exact canonical (feed SMALL local values only)
+  const cTo   = (c)=>Number(c)/HUNDREDTHS;                            // canonical -> real clicks (Number; exact for small)
+  const posFrom = (r)=>({x:cFrom(r.x), y:cFrom(r.y), z:cFrom(r.z||0)});
+  const posTo   = (p)=>({x:cTo(p.x), y:cTo(p.y), z:cTo(p.z)});
+  const add = (a,b)=>({x:a.x+b.x, y:a.y+b.y, z:a.z+b.z});             // exact BigInt add — no drift at ANY scale (use to place absolute positions)
+  const sub = (a,b)=>({x:a.x-b.x, y:a.y-b.y, z:a.z-b.z});
+  const serialize   = (p)=>({x:p.x.toString(), y:p.y.toString(), z:p.z.toString()});   // BigInt -> decimal string (JSON throws on BigInt; strings round-trip losslessly)
+  const deserialize = (s)=>({x:BigInt(s.x), y:BigInt(s.y), z:BigInt(s.z)});
+  const ORIGIN = {x:0n, y:0n, z:0n};
+  return { HUNDREDTHS, roundHalfEven, cFrom, cTo, posFrom, posTo, add, sub, serialize, deserialize, ORIGIN };
+})();
+
+// ============================================================================
+//  COORD — the coordinate DATABASE (ported from WORLD exhibit coordinateDb).
+//  A galaxy's systems become a relocatable STAMP: a Group of exact-BigInt click
+//  records, authored ORIGIN-RELATIVE (local). placeGroup re-anchors the whole set
+//  with an exact BigInt add, so a set authored around origin lands EXACTLY at a
+//  galaxy position 10^15 clicks out (zero precision loss). Lossless JSON I/O
+//  (unit=click), worldSpec-stamped. Phase 2: systems -> records, index-refs -> id.
+// ============================================================================
+const COORD = (function(){
+  function centroid(records){                                        // mean position (BigInt, truncating — a reference point, not exact-critical)
+    if(!records.length) return FIXPT.ORIGIN;
+    let sx=0n, sy=0n, sz=0n;
+    for(const r of records){ sx+=r.position.x; sy+=r.position.y; sz+=r.position.z; }
+    let n=BigInt(records.length);
+    return { x:sx/n, y:sy/n, z:sz/n };
+  }
+  function placeGroup(group, anchor, byCentroid){                    // absolute records so the reference lands on `anchor` (exact at any scale)
+    if(byCentroid===undefined) byCentroid = group.anchorMode==='centre-of-mass';
+    let reference = byCentroid ? centroid(group.records) : FIXPT.ORIGIN;
+    let offset = FIXPT.sub(anchor, reference);
+    return group.records.map(r=>({ ...r, position:FIXPT.add(r.position, offset) }));
+  }
+  const newRecord   = (id, x=0, y=0, z=0, label)=>({ id, label, position:FIXPT.posFrom({x,y,z}) });
+  const recordClicks= (r)=>FIXPT.posTo(r.position);                  // a record's position as Number clicks (display/edit)
+  function setRecordAxis(r, axis, clickValue){ let c=FIXPT.posTo(r.position); c[axis]=clickValue; return { ...r, position:FIXPT.posFrom(c) }; }
+  const emptyGroup  = (id='galaxy', name='Untitled')=>({ id, name, anchorMode:'origin', labeled:false, version:'', meta:{}, records:[] });
+  function exportGroup(group){                                       // lossless JSON: records as Number clicks + worldSpec drift anchor
+    return { unit:'click', worldSpec:WORLD_SPEC,
+      group:{ id:group.id, name:group.name, anchorMode:group.anchorMode||'origin', labeled:!!group.labeled, version:group.version||'', meta:group.meta||{},
+        records:group.records.map(r=>{ let c=FIXPT.posTo(r.position); return Object.assign({ id:r.id, x:c.x, y:c.y, z:c.z }, r.meta||{}); }) } };
+  }
+  function importGroup(data){ let g=(data&&data.group)||data||{};    // accept {group} or a bare group
+    return { id:g.id, name:g.name, anchorMode:g.anchorMode||'origin', labeled:g.labeled??false, version:g.version||'', meta:g.meta||{},
+      records:(g.records||[]).map(r=>({ id:r.id, position:FIXPT.posFrom({x:r.x, y:r.y, z:r.z||0}) })) }; }
+  return { centroid, placeGroup, newRecord, recordClicks, setRecordAxis, emptyGroup, exportGroup, importGroup };
 })();
 
 const GRID = (function(){
