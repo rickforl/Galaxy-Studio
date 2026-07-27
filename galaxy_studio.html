@@ -68,8 +68,9 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '09';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.09: mobile touch — 1-finger pan, 2-finger pinch-zoom, tap waypoint; viewport meta + canvas touch-action]
+const BUILD_SEQ  = '10';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.10: WORLD units seam — UNITS module + WORLD_SPEC anchor + world-Y-up/ENU convention (projection, star matrix, backdrop, previews, readout all flipped)]
 const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
+const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
 // except the plasma/filament noise textures, which are baked once and tinted/faded live).
@@ -344,7 +345,7 @@ function drawLanesPreview(){                                // isolated lane net
   let fit=Math.min(playW,height)*0.9/(2*ext);               // fit the node cloud into ~90% of the play area
   drawLanes(0,0,fit);                                        // beams via a flat fit-camera (reuses the galaxy-view renderer)
   noStroke();                                                // system nodes on top, as lane anchors
-  for(const s of galaxy){ let x=px+s.x*fit, y=py+s.y*fit, r=1.6+(s.tier-1)*1.4; fill(s.color[0],s.color[1],s.color[2],235); circle(x,y,r*2); }
+  for(const s of galaxy){ let x=px+s.x*fit, y=py-s.y*fit, r=1.6+(s.tier-1)*1.4; fill(s.color[0],s.color[1],s.color[2],235); circle(x,y,r*2); }
   blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
   let msg = CFG.lanes.on ? (laneList.length+' lanes · '+galaxy.length+' systems') : ('lanes off · '+galaxy.length+' systems');
   text('lanes preview · '+msg+' · pan/zoom + backdrop in VIEW GALAXY', px, height-16);
@@ -643,7 +644,7 @@ function drawTrafficPreview(){
   } else background(3,4,9);
   drawLanes(0,0,fit);                                        // lanes beneath (respects the Lanes tab)
   drawTraffic(0,0,fit);                                      // ships on top
-  blendMode(BLEND); noStroke(); for(const s of galaxy){ let x=px+s.x*fit, y=py+s.y*fit, r=1.6+(s.tier-1)*1.4; fill(s.color[0],s.color[1],s.color[2],235); circle(x,y,r*2); }
+  blendMode(BLEND); noStroke(); for(const s of galaxy){ let x=px+s.x*fit, y=py-s.y*fit, r=1.6+(s.tier-1)*1.4; fill(s.color[0],s.color[1],s.color[2],235); circle(x,y,r*2); }
   blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER, BOTTOM);
   let nL=TC.layers.filter(l=>l.on).length;
   text('traffic preview · '+nL+' of '+TC.layers.length+' layers · lanes + ships · full context in VIEW GALAXY', px, height-16);
@@ -685,8 +686,8 @@ const DATUM = (function(){
   // stay correct; galaxy-view callers omit it and get the live canvas center. Byte-identical to
   // the inline formula it replaces — this is the seam a future WORLD-space consumer swaps.
   function center(){ return { x:(PANELW+width)/2, y:height/2 }; }
-  function w2s(wx, wy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x: px+(cx+wx)*z, y: py+(cy+wy)*z }; }
-  function s2w(sx, sy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x:(sx-px)/z-cx, y:(sy-py)/z-cy }; }
+  function w2s(wx, wy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x: px+(cx+wx)*z, y: py-(cy+wy)*z }; }   // Y-up: world +y renders UP (ENU), so y is subtracted
+  function s2w(sx, sy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x:(sx-px)/z-cx, y:(py-sy)/z-cy }; }   // inverse of the Y-up projection
   return { mapPx, screenPx, unit, worldToUnit, unitToWorld, center, w2s, s2w, MIN_PX };
 })();
 
@@ -712,6 +713,26 @@ const MOTION = (function(){
     return ((base + d) % 1 + 1) % 1;
   }
   return { progress, scale };
+})();
+
+// ============================================================================
+//  UNITS — the unified click-pivot converter (ported from WORLD space.units.v01,
+//  spec in WORLD_SPEC). Every unit (world / grid-cell / pixel / screen-%) converts
+//  THROUGH the click (the space datum): A -> clicks -> B. World unit = click
+//  (identity; a genre may rescale). Convention: world +Y is UP (ENU) — the render
+//  Y-flip lives in DATUM.w2s + the star matrix. This is the coordinate/distance
+//  layer; the camera PROJECTION stays in DATUM (PANELW-adapted). Port, not shared —
+//  drift anchored by WORLD_SPEC.
+// ============================================================================
+const UNITS = (function(){
+  const worldToClicks = (w)=>w, clicksToWorld = (c)=>c;                          // world unit = click (identity)
+  const gridToClicks = (cells, cellSize)=>cells*cellSize;                        // grid overlay: cellSize clicks per cell (NOT the fundamental 1-click cell)
+  const clicksToGrid = (clicks, cellSize)=>clicks/cellSize;
+  const gridCellOf = (clicks, cellSize)=>Math.floor(clicks/cellSize);           // which integer cell a click falls in (floored)
+  const snapToGridCenter = (clicks, cellSize)=>(Math.floor(clicks/cellSize)+0.5)*cellSize;
+  const clicksToPixels = (clicks, scale)=>clicks*scale;                         // scale = pixels-per-click (the zoom)
+  const pixelsToClicks = (px, scale)=>px/scale;
+  return { worldToClicks, clicksToWorld, gridToClicks, clicksToGrid, gridCellOf, snapToGridCenter, clicksToPixels, pixelsToClicks };
 })();
 
 const GRID = (function(){
@@ -900,7 +921,7 @@ const GRID = (function(){
   function axialRound(q,r){ let x=q, z=r, y=-x-z, rx=Math.round(x), ry=Math.round(y), rz=Math.round(z);   // cube rounding -> nearest hex
     let dx=Math.abs(rx-x), dy=Math.abs(ry-y), dz=Math.abs(rz-z);
     if(dx>dy && dx>dz) rx=-ry-rz; else if(dy>dz) ry=-rx-rz; else rz=-rx-ry; return { q:rx, r:rz }; }
-  function dispY(wy){ return G.coYup ? -wy : wy; }                              // presentation flip: +Y = up/north (internal world stays Y-down)
+  function dispY(wy){ return G.coYup ? wy : -wy; }                              // internal world is now Y-up/ENU (+Y = up/north); coYup shows it native, off shows Y-down
   function genCoordStr(wx,wy){ return 'x'+Math.round(wx)+' y'+Math.round(dispY(wy))+' r'+Math.round(Math.hypot(wx,wy)); }
   function gridCoordStr(wx,wy){
     if(G.type==='polar'){ let r=Math.hypot(wx,wy), ring=Math.floor(r/G.ringSpacing)+1, a0=(POLAR_ZERO[G.polarZero]||0)+G.angleOffset, th=Math.atan2(wy,wx)*180/Math.PI;
@@ -962,7 +983,7 @@ function drawGridPreview(){
   let px=(PANELW+width)/2, py=height/2, playW=width-PANELW;
   let E=(CFG.gen.radius + Math.max(0,CFG.grid.boundaryPad))*(CFG.grid.type==='iso'?1.35:1.06);
   let fit=Math.min(playW,height)*0.85/(2*Math.max(1,E));
-  noStroke(); for(const s of galaxy){ let x=px+s.x*fit, y=py+s.y*fit; fill(150,165,200,70); circle(x,y,2.2); }   // faint galaxy systems for scale/context
+  noStroke(); for(const s of galaxy){ let x=px+s.x*fit, y=py-s.y*fit; fill(150,165,200,70); circle(x,y,2.2); }   // faint galaxy systems for scale/context
   GRID.draw(0,0,fit,true);                                                       // force-draw even if 'off', so you can tune it here
   if(CFG.grid.coMouse||CFG.grid.coWaypoint||CFG.grid.coSystem) GRID.readout(0,0,fit);   // readout over the preview (same fit camera)
   blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER,BOTTOM);
@@ -981,7 +1002,7 @@ function drawGalaxyView(){
   let baked = CFG.gen.bakedRender;
   let liveOverlay = baked && ['glow','streamers','bloom','core','rim','prom','embers'].some(L => OPTS[L+'On'] && CFG.sun['bake_'+L]===false);
   push();
-  translate(playX, playY); translate(cam.x*cam.zoom, cam.y*cam.zoom); scale(cam.zoom);
+  translate(playX, playY); translate(cam.x*cam.zoom, -cam.y*cam.zoom); scale(cam.zoom, -cam.zoom);   // Y-up: negate cam.y + flip scale-y so stars match DATUM.w2s (suns are radial, so the sprite mirror is invisible)
   let drawn=0;
   for(const s of galaxy){
     let wr = CFG.gen.starSize * (1 + (s.tier-1)*0.35);        // world star radius by tier
@@ -1191,7 +1212,7 @@ function bd_fadeViewport(F){                                                  //
   let cx, cy, sx, sy;
   if(F.track==='map'){                                                     // anchored to the galaxy (world origin + radius): Inner/Outer are ×gen.radius; zooms AND pans with the map
     let z=cam.zoom, px=(PANELW+width)/2, py=height/2, R=Math.max((CFG.gen.radius||1000)*z, 1);
-    cx=px+cam.x*z; cy=py+cam.y*z; sx=R; sy=R;                                  // 1 unit = galaxy radius on screen
+    cx=px+cam.x*z; cy=py-cam.y*z; sx=R; sy=R;                                  // 1 unit = galaxy radius on screen (Y-up: origin projects to py - cam.y*z)
   } else {                                                                     // viewport vignette (screen-space, aspect-aware)
     let sh=(F.shape===undefined?1:F.shape), avg=(pw+ph)*0.25;
     cx=PANELW+pw*0.5; cy=ph*0.5; sx=lerp(avg,pw*0.5,sh); sy=lerp(avg,ph*0.5,sh);   // shape: 0 = round circle .. 1 = viewport-aspect ellipse
@@ -1292,7 +1313,7 @@ function enterFullscreen(){ applyFullscreen(true); let el=document.documentEleme
 function exitFullscreen(){ let inFs=!!document.fullscreenElement; applyFullscreen(false); if(inFs && document.exitFullscreen){ try{ document.exitFullscreen().catch(()=>{}); }catch(e){} } }
 const CFG_KEY='galaxy_studio_cfg';
 let lastSaved='', lastSaveCheck=0;
-function studioSnapshot(){ return Object.assign({}, CFG, { build: BUILD_ID, view:{ camX:cam.x, camY:cam.y, camZoom:cam.zoom, preset:ACTIVE_PRESET } }); }   // full studio state: build id + all CFG + framing + preset. `build` is metadata — applySnapshot ignores it (only merges CFG sections + view), so it round-trips harmlessly.
+function studioSnapshot(){ return Object.assign({}, CFG, { build: BUILD_ID, worldSpec: WORLD_SPEC, view:{ camX:cam.x, camY:cam.y, camZoom:cam.zoom, preset:ACTIVE_PRESET } }); }   // full studio state: build id + all CFG + framing + preset. `build` is metadata — applySnapshot ignores it (only merges CFG sections + view), so it round-trips harmlessly.
 function buildNum(id){ let m=/(\d{8})\.(\d+)/.exec(id||''); return m ? (+m[1])*100 + (+m[2]) : 0; }   // 'v0.1_20260720.02' -> 2026072002 (date*100 + seq); missing -> 0
 const FLIP_BUILD = 2026072002;   // build .02: ship-size/gap + lane-gap became MAP-frame world-units; older snapshots stored them as SCREEN px
 function migrateSnapshot(c){                                // FIRST migration test — load-time LOCAL reconciliation (no network / update-check)
