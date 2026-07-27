@@ -57,6 +57,9 @@
   <button id="export-btn">Export</button>
   <button id="import-btn">Import</button>
   <input type="file" id="import-file" accept=".json" style="display:none">
+  <button id="ds-export-btn" title="Save the galaxy DATASET (exact systems: positions + tier/color/seed) as lossless JSON">Save Data</button>
+  <button id="ds-import-btn" title="Load a galaxy DATASET JSON (restores the exact systems)">Load Data</button>
+  <input type="file" id="ds-import-file" accept=".json" style="display:none">
 </div>
 <div id="fps-sheet"></div>
 <div id="panel"><div id="nav"></div><div id="pagebody"></div></div>
@@ -68,7 +71,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260726';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '03';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.03: Phase 2d — systems carry exact-BigInt canonical position (of-record store) + cached working x/y; galaxy exposed as a COORD Group (galaxyGroup())]
+const BUILD_SEQ  = '04';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.04: Phase 2e — galaxy DATASET persistence: lossless worldSpec-stamped Save/Load Data (positions as exact clicks + tier/color/seed); separate artifact from the config snapshot]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -229,6 +232,9 @@ function setup(){
   document.getElementById('import-btn').onclick = () => document.getElementById('import-file').click();
   { let ps=document.getElementById('preset-select'); if(ps) ps.onchange = e=>{ if(e.target.value) applyGalaxyPreset(e.target.value); }; buildPresetMenu(); }   // top-bar galaxy presets (dropdown shows the picked tier)
   document.getElementById('import-file').onchange = (e) => { if (e.target.files[0]) importCFG(e.target.files[0]); };
+  document.getElementById('ds-export-btn').onclick = exportDataset;                               // Phase 2e: dataset (exact systems) file save/load
+  document.getElementById('ds-import-btn').onclick = () => document.getElementById('ds-import-file').click();
+  document.getElementById('ds-import-file').onchange = (e) => { if (e.target.files[0]) importDataset(e.target.files[0]); };
   document.getElementById('fps-pill').onclick = toggleFpsSheet;
   document.getElementById('fs-btn').onclick = enterFullscreen;
   document.addEventListener('fullscreenchange', ()=>{ if(!document.fullscreenElement && fullscreen) applyFullscreen(false); });   // Esc / native exit -> restore the UI
@@ -1422,6 +1428,44 @@ function importCFG(file){
   let rd=new FileReader();
   rd.onload=()=>{ try{ applySnapshot(JSON.parse(rd.result)); afterConfigChange(); autoSave(true); }
     catch(err){ try{ alert('Bad config JSON: '+err.message); }catch(_){ console.warn('Bad config JSON:', err.message); } } };
+  rd.readAsText(file);
+}
+
+// ---------- Galaxy DATASET persistence (Phase 2e) ----------
+// The systems as a lossless, worldSpec-stamped COORD Group: positions as exact Number clicks
+// (radius ~1200 -> Number-lossless) + the galaxy fields (tier/color/seed). A SEPARATE artifact
+// from the config (studioSnapshot): the config reproduces a PROCEDURAL galaxy from its seed; the
+// dataset stores the ACTUAL systems (survives hand-editing in Phase 3). worldSpec stamps the drift
+// anchor. NOTE: not yet in autosave -> an imported dataset is session-transient (a reload regens
+// from seed); the file is the durable store. Folding it into the snapshot changes the export
+// contract the panels-port consumes -> deferred, flagged decision.
+function datasetExport(){
+  let grp=galaxyGroup();
+  return { unit:'click', kind:'galaxy-dataset', worldSpec:WORLD_SPEC,
+    group:{ id:grp.id, name:grp.name, anchorMode:grp.anchorMode||'origin', labeled:!!grp.labeled, version:grp.version||'', meta:grp.meta||{},
+      records:grp.records.map(s=>{ let c=FIXPT.posTo(s.position); return { id:s.id, x:c.x, y:c.y, z:c.z, tier:s.tier, color:s.color, seed:s.seed }; }) } };
+}
+function datasetImport(data){                                   // reconstruct the galaxy FROM a dataset (systems become stored, not seed-derived)
+  let g=(data&&data.group)||data||{}, recs=g.records||[];
+  if(!recs.length) return false;
+  if(data&&data.worldSpec&&WORLD_SPEC&&data.worldSpec.space!==WORLD_SPEC.space) console.warn('dataset worldSpec.space',data.worldSpec.space,'!= app',WORLD_SPEC.space,'- positions still clicks; review drift');
+  galaxy=recs.map(r=>{ let pos=FIXPT.posFrom({x:+r.x,y:+r.y,z:+(r.z||0)}), wc=FIXPT.posTo(pos);   // canonical = truth; x/y = its exact shadow (same discipline as generate)
+    return { id:r.id, position:pos, x:wc.x, y:wc.y, tier:(r.tier!=null?r.tier:1), color:(Array.isArray(r.color)?r.color.slice():[200,200,200]), seed:(r.seed!=null?r.seed:0) }; });
+  sysMap=new Map(galaxy.map(s=>[s.id,s]));
+  galaxyMeta={ id:g.id||'galaxy', name:g.name||'Galaxy', anchorMode:g.anchorMode||'origin', version:g.version||'', meta:g.meta||{} };
+  lnNeedsBuild=true; sfNeedGen=true; sfDirty=true; invalidateSunSprites(); invalidateBackdrop();   // re-bake lanes/starfield/suns/backdrop to the restored systems
+  return true;
+}
+function exportDataset(){
+  let el=document.getElementById('export-name'); let base=((el&&el.value)||'galaxy').trim().replace(/\.json$/i,'').replace(/_cfg$/i,'')||'galaxy';
+  let url=URL.createObjectURL(new Blob([JSON.stringify(datasetExport(),null,2)],{type:'application/json'}));
+  let a=document.createElement('a'); a.href=url; a.download=base+'_dataset.json'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+function importDataset(file){
+  let rd=new FileReader();
+  rd.onload=()=>{ try{ if(datasetImport(JSON.parse(rd.result))){ showPage(); } else { try{ alert('No records in dataset JSON'); }catch(_){ } } }
+    catch(err){ try{ alert('Bad dataset JSON: '+err.message); }catch(_){ console.warn('Bad dataset JSON:', err.message); } } };
   rd.readAsText(file);
 }
 
