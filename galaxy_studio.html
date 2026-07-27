@@ -68,7 +68,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260726';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '02';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.02: Phase 2b+2c — systems get stable ids + sysMap; lanes/traffic/readout reference by id (array-index refs retired). v1 = WORLD-consumer milestone.]
+const BUILD_SEQ  = '03';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.03: Phase 2d — systems carry exact-BigInt canonical position (of-record store) + cached working x/y; galaxy exposed as a COORD Group (galaxyGroup())]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -1090,6 +1090,8 @@ function drawGalaxyView(){
 let galaxy = [];                        // [{id,x,y,tier,color,seed}]  — systems; Phase 2 target = a COORD Group of exact-click records
 let sysMap = new Map();                 // id -> system, rebuilt in generateGalaxy; resolves id-refs (lanes/traffic/readout) — array-index refs retired (Phase 2c)
 function sysById(id){ return sysMap.get(id); }
+let galaxyMeta = { id:'galaxy', name:'Galaxy', anchorMode:'origin', version:'', meta:{} };   // COORD Group metadata wrapped around the systems (records = galaxy) — Phase 2d
+function galaxyGroup(){ return { id:galaxyMeta.id, name:galaxyMeta.name, anchorMode:galaxyMeta.anchorMode, labeled:false, version:galaxyMeta.version, meta:galaxyMeta.meta, records:galaxy }; }   // the systems AS a COORD Group of exact-click records (for export/stamp)
 let cam = { x: 0, y: 0, zoom: 0.35 };   // world offset + zoom for the galaxy view
 const SPECTRAL = [['M',[255,50,50]],['K',[255,140,0]],['G',[255,255,0]],['F',[240,240,255]],['B',[50,100,255]],['O',[150,50,255]]];
 function randomSpectral(g){
@@ -1116,10 +1118,12 @@ function generateGalaxy(g){
     } else {                               // IE (placeholder): uniform across the disc, no min-dist
       let a=random(TWO_PI), rr=R*Math.sqrt(random()); x=cos(a)*rr; y=sin(a)*rr;
     }
-    galaxy.push({ id:'S'+placed, x, y, tier: tiers[placed]||1, color: randomSpectral(g), seed: placed*997+1 });   // stable id (Phase 2b) — refs are by id, not array index
+    const _pos = FIXPT.posFrom({x,y,z:0}), _wc = FIXPT.posTo(_pos);   // canonical (0.01-click) is the source of truth; working x/y = its exact Number shadow (Phase 2d)
+    galaxy.push({ id:'S'+placed, position: _pos, x: _wc.x, y: _wc.y, tier: tiers[placed]||1, color: randomSpectral(g), seed: placed*997+1 });   // exact canonical position + snapped working x/y; refs by id (2b)
     placed++;
   }
   sysMap = new Map(galaxy.map(s=>[s.id, s]));   // rebuild the id->system lookup for lane/traffic/readout refs
+  galaxyMeta.meta = { seed: g.seed|0, starCount: galaxy.length, generatedBy:'procedural' };   // provenance travels with the Group
 }
 // ---------- baked sun sprites (per spectral-color cache) for VIEW GALAXY ----------
 const SUN_REF = 40, SUN_SPRITE_SZ = 640;   // sprite baked at radius SUN_REF; buffer holds the halos
