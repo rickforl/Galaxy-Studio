@@ -76,7 +76,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260727';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '03';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [20260727.03: tightened the systems grid + paginated it — 50/page as two side-by-side 25-row columns, prev/next pager, opens to the selected system's page]
+const BUILD_SEQ  = '04';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [20260727.04: systems grid now proportional (flex-ratio cells, % columns) not fixed-px — scales with the preview; centered X/Y/Z/TIER headers + a DEL header; wider %-based gutter between the two sides]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -1977,10 +1977,16 @@ function buildSystemsTable(container){   // raw-data grid in the #gen-preview ov
   let addBtn=document.createElement('button'); addBtn.textContent='+ Add system'; addBtn.style.cssText='background:#16233b;color:#cdd9ef;border:1px solid #3a5a8c;font:inherit;font-size:11px;padding:4px 12px;cursor:pointer;white-space:nowrap;';
   addBtn.onclick=()=>{ addStarWorld(0,0); genPage=Math.max(0,Math.ceil(galaxy.length/50)-1); renderSystemsTable(); updateEditInspector(); };
   hdr.appendChild(title); hdr.appendChild(pager); hdr.appendChild(addBtn); container.appendChild(hdr);
-  let colGroup='<div style="display:flex;gap:4px;padding:0 8px;"><span style="width:28px;">SYS</span><span style="width:62px;text-align:right;">X</span><span style="width:62px;text-align:right;">Y</span><span style="width:62px;text-align:right;">Z</span><span style="width:22px;text-align:center;">TIER</span><span style="width:24px;"></span></div>';
-  let colh=document.createElement('div'); colh.style.cssText='display:flex;gap:14px;padding:5px 14px 4px;font-size:10px;letter-spacing:.5px;opacity:.5;border-bottom:1px solid #172338;'; colh.innerHTML=colGroup+colGroup;
+  let colGroup='<div style="flex:0 0 48%;min-width:0;display:flex;gap:6px;padding:0 10px;">'+
+    '<span style="flex:1.1 1 0;min-width:0;">SYS</span>'+
+    '<span style="flex:1.7 1 0;min-width:0;text-align:center;">X</span>'+
+    '<span style="flex:1.7 1 0;min-width:0;text-align:center;">Y</span>'+
+    '<span style="flex:1.7 1 0;min-width:0;text-align:center;">Z</span>'+
+    '<span style="flex:1 1 0;min-width:0;text-align:center;">TIER</span>'+
+    '<span style="flex:1 1 0;min-width:0;text-align:center;">DEL</span></div>';
+  let colh=document.createElement('div'); colh.style.cssText='display:flex;justify-content:space-between;padding:5px 14px 4px;font-size:10px;letter-spacing:.5px;opacity:.5;border-bottom:1px solid #172338;'; colh.innerHTML=colGroup+colGroup;
   container.appendChild(colh);
-  let body=document.createElement('div'); body.id='sys-table'; body.style.cssText='flex:1;overflow:auto;display:flex;gap:14px;padding:0 14px;align-items:flex-start;';
+  let body=document.createElement('div'); body.id='sys-table'; body.style.cssText='flex:1;overflow:auto;display:flex;justify-content:space-between;padding:0 14px;align-items:flex-start;';
   body.addEventListener('change', e=>{ let inp=e.target; if(inp.dataset&&inp.dataset.sid!=null&&inp.dataset.axis) setSysAxis(inp.dataset.sid, inp.dataset.axis, inp.value); });
   body.addEventListener('click', e=>{ let del=e.target.closest('[data-del]'); if(del){ deleteSysById(del.dataset.del); renderSystemsTable(); updateEditInspector(); return; }
     let row=e.target.closest('[data-row]'); if(row && e.target.tagName!=='INPUT'){ editSelId=row.dataset.row; highlightSystemsRow(); updateEditInspector(); } });
@@ -1991,15 +1997,15 @@ function renderSystemsTable(){
   let el=document.getElementById('sys-table'); if(!el) return;
   let per=50, mp=Math.max(1,Math.ceil(galaxy.length/per)); genPage=Math.min(Math.max(0,genPage),mp-1);
   let page=galaxy.slice(genPage*per, genPage*per+per);
-  let inp=(id,ax,v)=>'<input data-sid="'+id+'" data-axis="'+ax+'" type="number" step="1" value="'+v+'" style="box-sizing:border-box;width:62px;background:#0c1018;color:#e6edfb;border:1px solid #2a3550;border-radius:3px;font:inherit;font-size:11px;padding:1px 3px;text-align:right;">';
+  let inp=(id,ax,v)=>'<input data-sid="'+id+'" data-axis="'+ax+'" type="number" step="1" value="'+v+'" style="flex:1.7 1 0;min-width:0;box-sizing:border-box;background:#0c1018;color:#e6edfb;border:1px solid #2a3550;border-radius:3px;font:inherit;font-size:11px;padding:1px 4px;text-align:right;">';
   let rowHtml=(s)=>{ let c=FIXPT.posTo(s.position), sel=(s.id===editSelId);
-    return '<div data-row="'+s.id+'" style="display:flex;align-items:center;gap:4px;padding:2px 8px;border-bottom:1px solid #131e30;'+(sel?'background:#1c3a66;':'')+'cursor:pointer;">'+
-      '<span data-idcell style="width:28px;opacity:.9;color:'+(sel?'#ffd77a':'#9fb4d8')+';">'+s.id+'</span>'+
+    return '<div data-row="'+s.id+'" style="display:flex;align-items:center;gap:6px;padding:3px 10px;border-bottom:1px solid #131e30;'+(sel?'background:#1c3a66;':'')+'cursor:pointer;">'+
+      '<span data-idcell style="flex:1.1 1 0;min-width:0;opacity:.9;color:'+(sel?'#ffd77a':'#9fb4d8')+';">'+s.id+'</span>'+
       inp(s.id,'x',c.x)+inp(s.id,'y',c.y)+inp(s.id,'z',c.z)+
-      '<span style="width:22px;text-align:center;opacity:.6;">T'+s.tier+'</span>'+
-      '<button data-del="'+s.id+'" title="Delete" style="width:24px;background:#5a2130;color:#ffd0d0;border:1px solid #8c3a4a;border-radius:3px;font:inherit;font-size:11px;line-height:1;padding:1px 0;cursor:pointer;">&times;</button>'+
+      '<span style="flex:1 1 0;min-width:0;text-align:center;opacity:.6;">T'+s.tier+'</span>'+
+      '<span style="flex:1 1 0;min-width:0;display:flex;justify-content:center;"><button data-del="'+s.id+'" title="Delete" style="background:#5a2130;color:#ffd0d0;border:1px solid #8c3a4a;border-radius:3px;font:inherit;font-size:11px;line-height:1;padding:1px 8px;cursor:pointer;">&times;</button></span>'+
     '</div>'; };
-  let col=(arr)=>'<div style="flex:0 0 auto;">'+arr.map(rowHtml).join('')+'</div>';
+  let col=(arr)=>'<div style="flex:0 0 48%;min-width:0;">'+arr.map(rowHtml).join('')+'</div>';
   el.innerHTML = page.length ? (col(page.slice(0,25))+(page.length>25?col(page.slice(25,50)):'')) : '<div style="padding:12px;opacity:.6;">No systems — use + Add system.</div>';
   let hdr=el.parentNode;
   let t=hdr&&hdr.querySelector('.lab'); if(t) t.textContent='Systems dataset · '+galaxy.length;
