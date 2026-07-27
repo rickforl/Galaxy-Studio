@@ -73,7 +73,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260726';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '07';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.07: Phase 3c — edit-mode ADD/DELETE + grid SNAP: armed add-mode places a star on click (unique id, spectral color), Delete removes the selected system, snap toggle rounds drag+add to the grid spacing; all via the canonical store]
+const BUILD_SEQ  = '08';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.08: snap upgraded to true per-grid geometry (square/iso lattice, polar rings×spokes, hex offset-lattice) mirroring GRID's world-space math + a snap-target cycle: Center / Cross (line crossings & hex vertices) / Near]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -249,7 +249,7 @@ function setup(){
 function windowResized(){ resizeCanvas(windowWidth, windowHeight); invalidateStars(); }
 
 let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
-let editMode=false, editSelId=null, editDrag=null, galaxyAuthored=false, editAdd=false, editSnap=false;   // Phase 3a/3b/3c: opt-in authoring toggle + selected id + active drag-grab + divergence flag + add-mode + grid-snap
+let editMode=false, editSelId=null, editDrag=null, galaxyAuthored=false, editAdd=false, editSnap=false, editSnapTo='nearest';   // Phase 3a/3b/3c: authoring toggle + selected id + drag-grab + divergence flag + add-mode + grid-snap + snap target ('center'|'line'|'nearest')
 let fullscreen = false, infoOverlay = true;   // fullscreen galaxy (Esc to exit); info overlay = subtle build+fps bottom-left (toggle with i)
 let lastInteract = -99999;  // ms of the last pan/zoom — used to defer the expensive nebula re-render while interacting
 function draw(){
@@ -1407,8 +1407,30 @@ function pickStar(mx,my){             // nearest system to a screen point within
 }
 function screenToWorld(mx,my){ return DATUM.s2w(mx,my,cam.x,cam.y,cam.zoom,(PANELW+width)/2,height/2); }
 function markAuthored(){ galaxyAuthored=true; if(galaxyMeta&&galaxyMeta.meta){ galaxyMeta.meta.generatedBy='hand-edited'; galaxyMeta.meta.starCount=galaxy.length; } }   // 3b/3c: divergence + fresh count (provenance + the future autosave gate)
-function snapStep(){ let G=CFG.grid; if(!G) return 100; return (G.type==='hex'?G.hexSize:G.type==='polar'?G.ringSpacing:G.sqSpacing)||100; }   // grid spacing (clicks) by type
-function snapWorld(wx,wy){ if(!editSnap) return {x:wx,y:wy}; let st=snapStep()||1; return { x:Math.round(wx/st)*st, y:Math.round(wy/st)*st }; }   // 3c: snap to nearest square-lattice point of the grid spacing
+// ---- Grid snap (mirrors GRID's world-space geometry so a snapped star lands exactly on the drawn grid) ----
+const POLAR_ZERO_SNAP={ east:0, north:-90, west:180, south:90 };   // mirror of GRID's POLAR_ZERO (world-angle, degrees, of the polar zero direction)
+function _d2(ax,ay,bx,by){ let dx=ax-bx, dy=ay-by; return dx*dx+dy*dy; }
+function _pick(m,line,ctr,wx,wy){ if(m==='center') return ctr; if(m==='line') return line; return _d2(line.x,line.y,wx,wy)<=_d2(ctr.x,ctr.y,wx,wy)?line:ctr; }
+function snapSquare(wx,wy,m){ let sp=(CFG.grid.sqSpacing)||60;   // lines at k*sp; cell centers at (k+0.5)*sp
+  return _pick(m, {x:Math.round(wx/sp)*sp, y:Math.round(wy/sp)*sp}, {x:(Math.floor(wx/sp)+0.5)*sp, y:(Math.floor(wy/sp)+0.5)*sp}, wx, wy); }
+function snapPolar(wx,wy,m){ let G=CFG.grid, rs=G.ringSpacing||100, sc=G.spokeCount|0, a0=((POLAR_ZERO_SNAP[G.polarZero]||0)+(G.angleOffset||0))*Math.PI/180;
+  let r=Math.hypot(wx,wy), th=Math.atan2(wy,wx), step=(sc>0)?(2*Math.PI/sc):0;                                   // rings at k*rs; spokes at a0 + i*step
+  let lineR=Math.max(0,Math.round(r/rs))*rs, lineTh=(sc>0)?a0+Math.round((th-a0)/step)*step:th;                   // ring x spoke crossing
+  let ctrR=(Math.floor(r/rs)+0.5)*rs, ctrTh=(sc>0)?a0+(Math.floor((th-a0)/step)+0.5)*step:th;                     // sector (wedge) centre
+  return _pick(m, {x:lineR*Math.cos(lineTh), y:lineR*Math.sin(lineTh)}, {x:ctrR*Math.cos(ctrTh), y:ctrR*Math.sin(ctrTh)}, wx, wy); }
+function snapHex(wx,wy,m){ let G=CFG.grid, s=G.hexSize||100, flat=!!G.hexFlat, w=flat?s*1.5:Math.sqrt(3)*s, h=flat?Math.sqrt(3)*s:s*1.5;
+  let cEst, rEst;                                                                                                 // estimate the cell, then search the neighbourhood using GRID's exact centre formula
+  if(flat){ cEst=Math.round(wx/w); rEst=Math.round((wy-((cEst&1)?h/2:0))/h); }
+  else { rEst=Math.round(wy/h); cEst=Math.round((wx-((rEst&1)?w/2:0))/w); }
+  let bC=null,bcd=Infinity, bV=null,bvd=Infinity;
+  for(let dr=-2;dr<=2;dr++) for(let dc=-2;dc<=2;dc++){ let c=cEst+dc, r=rEst+dr;
+    let ox=flat?c*w:c*w+((r&1)?w/2:0), oy=flat?r*h+((c&1)?h/2:0):r*h;                                             // GRID's hex centre (drawHex)
+    let d=_d2(ox,oy,wx,wy); if(d<bcd){ bcd=d; bC={x:ox,y:oy}; }
+    for(let k=0;k<6;k++){ let ang=(Math.PI/180)*(60*k+(flat?0:30)), vx=ox+Math.cos(ang)*s, vy=oy+Math.sin(ang)*s, dv=_d2(vx,vy,wx,wy); if(dv<bvd){ bvd=dv; bV={x:vx,y:vy}; } } }   // GRID's hex vertices
+  if(m==='center') return bC; if(m==='line') return bV; return (bvd<=bcd)?bV:bC; }
+function snapWorld(wx,wy){ if(!editSnap) return {x:wx,y:wy}; let t=(CFG.grid&&CFG.grid.type)||'square';
+  return t==='hex'?snapHex(wx,wy,editSnapTo):t==='polar'?snapPolar(wx,wy,editSnapTo):snapSquare(wx,wy,editSnapTo); }   // square + iso share the square lattice
+function toggleSnapTo(){ editSnapTo=(editSnapTo==='center')?'line':(editSnapTo==='line')?'nearest':'center'; updateEditInspector(); }
 function newSysId(){ let mx=-1; for(const s of galaxy){ let m=/^S(\d+)$/.exec(s.id); if(m){ let n=+m[1]; if(n>mx) mx=n; } } return 'S'+(mx+1); }   // next free S<n> (unique across the current set, delete-safe)
 function addStarAt(mx,my){            // 3c: place a new system at a screen point (snapped if enabled), select it, keep add-mode armed
   let w=screenToWorld(mx,my), sp=snapWorld(w.x,w.y), id=newSysId(), num=+id.slice(1);
@@ -1460,7 +1482,7 @@ function updateEditInspector(){
   let s=(editSelId!=null)?sysById(editSelId):null;
   let body;
   if(editAdd){
-    body='<div style="font-weight:bold;color:#7fe0a0;margin-bottom:5px;">+ ADD MODE</div><div style="opacity:.65;line-height:1.4;margin-bottom:7px;">Click empty space to place a star'+(editSnap?' (snapped)':'')+'.<br>Drag to pan · turn Add off to move/select.</div>';
+    body='<div style="font-weight:bold;color:#7fe0a0;margin-bottom:5px;">+ ADD MODE</div><div style="opacity:.65;line-height:1.4;margin-bottom:7px;">Click empty space to place a star'+(editSnap?' (snap &#8594; '+((editSnapTo==='center')?'centers':(editSnapTo==='line')?'crossings':'nearest')+')':'')+'.<br>Drag to pan · turn Add off to move/select.</div>';
   } else if(!s){
     body='<div style="font-weight:bold;color:#8fb4ff;margin-bottom:5px;">&#9998; EDIT MODE</div><div style="opacity:.65;line-height:1.4;margin-bottom:7px;">Click a star to select.<br>Drag it to move · drag empty to pan.</div>';
   } else {
@@ -1472,15 +1494,18 @@ function updateEditInspector(){
       '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;"><span style="opacity:.65;">color</span><span style="flex:1;height:12px;border-radius:2px;background:rgb('+s.color.map(v=>v|0).join(',')+');"></span></div>'+
       '<div style="opacity:.5;margin:7px 0;line-height:1.35;">clicks · 1 = 1 world unit<br>drag on the map, or type a value</div>';
   }
+  let tgt=(editSnapTo==='center')?'Ctr':(editSnapTo==='line')?'Cross':'Near';
   let btn=(act,label,on,extra)=>'<button data-act="'+act+'" style="flex:1;background:'+(on?'#2a6cff':(extra||'#16233b'))+';color:'+(on?'#fff':'#cdd9ef')+';border:1px solid #3a5a8c;border-radius:3px;font:inherit;font-size:11px;padding:3px 4px;cursor:pointer;">'+label+'</button>';
   let footer='<div style="display:flex;gap:5px;margin-top:4px;">'+
-    btn('add', editAdd?'+ Add ✓':'+ Add', editAdd)+
+    btn('add', editAdd?'Add ✓':'+ Add', editAdd)+
     btn('snap', editSnap?'Snap ✓':'Snap', editSnap)+
-    ((s&&!editAdd)?btn('del','Delete',false,'#5a2130'):'')+'</div>';
+    btn('snapto', tgt, false, editSnap?'#16233b':'#0e1420')+'</div>'+
+    ((s&&!editAdd)?'<div style="display:flex;margin-top:5px;">'+btn('del','Delete selected',false,'#5a2130')+'</div>':'');
   el.innerHTML=body+footer;
   if(s && !editAdd){ ['x','y','z'].forEach(ax=>{ let inp=el.querySelector('[data-axis="'+ax+'"]'); if(inp){ inp.onchange=()=>commitAxis(ax, inp.value); inp.onkeydown=(e)=>{ if(e.key==='Enter') inp.blur(); }; } }); }
   let ab=el.querySelector('[data-act="add"]'); if(ab) ab.onclick=toggleAdd;
   let sb=el.querySelector('[data-act="snap"]'); if(sb) sb.onclick=toggleSnap;
+  let tb=el.querySelector('[data-act="snapto"]'); if(tb) tb.onclick=toggleSnapTo;
   let db=el.querySelector('[data-act="del"]'); if(db) db.onclick=deleteSelStar;
 }
 function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); }
