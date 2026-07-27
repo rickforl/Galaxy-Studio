@@ -67,9 +67,9 @@
 // ===================================================================
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
-const BUILD_DATE = '20260720';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '11';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.11: Phase 2a — port FIXPT (exact-BigInt fixedpoint) + COORD (coordinateDb records/groups/placement) modules, additive; no behavior change yet]
-const BUILD_ID   = 'v0.1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill
+const BUILD_DATE = '20260726';     // build day — reset SEQ to '01' on a new day
+const BUILD_SEQ  = '02';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.02: Phase 2b+2c — systems get stable ids + sysMap; lanes/traffic/readout reference by id (array-index refs retired). v1 = WORLD-consumer milestone.]
+const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed
@@ -405,7 +405,7 @@ function lnGabriel(cap){ let e=[], c2=cap*cap; for(let i=0;i<galaxy.length;i++)f
   for(let k=0;k<galaxy.length;k++){ if(k===i||k===j)continue; let dx=galaxy[k].x-mx, dy=galaxy[k].y-my; if(dx*dx+dy*dy<r2){ok=false;break;} }
   if(ok) e.push([i,j]); } return e; }
 function lnMk(a,b,kind){ let h=((a*131+b*977+(CFG.gen.seed|0)*7)>>>0), nx=()=>{ h=(h*1664525+1013904223)>>>0; return h/4294967296; };
-  return { a,b,kind, col:[50+(nx()*205|0),50+(nx()*205|0),50+(nx()*205|0)], col2:[50+(nx()*205|0),50+(nx()*205|0),50+(nx()*205|0)], r:nx() }; }
+  return { aId:galaxy[a].id, bId:galaxy[b].id, pathSeed:(a*131+b*977+(CFG.gen.seed|0)*31)>>>0, kind, col:[50+(nx()*205|0),50+(nx()*205|0),50+(nx()*205|0)], col2:[50+(nx()*205|0),50+(nx()*205|0),50+(nx()*205|0)], r:nx() }; }   // endpoints stored by ID (Phase 2c); pathSeed precomputed so lnRegenPaths needn't touch the refs
 function lnTransport(){ let C=CFG.lanes, e=[], seen=new Set(), maxD=C.officialDist*C.transRange, m2=maxD*maxD, hubs=[];   // trunk arteries between hub systems
   for(let i=0;i<galaxy.length;i++) if(galaxy[i].tier>=C.transTier) hubs.push(i);
   for(const i of hubs){ let cand=[]; for(const j of hubs){ if(i===j)continue; let d2=lnDist2(i,j); if(d2<=m2) cand.push({j,d2}); } cand.sort((a,b)=>a.d2-b.d2);
@@ -427,11 +427,11 @@ function lnGenPath(seed){ let C=CFG.lanes; if(C.pathMode==='straight') return nu
   let iters=C.pathDetail|0, rough=C.pathRough*(C.pathMode==='road'?0.5:1);
   for(let it=0;it<iters;it++){ let nx=[pts[0]]; for(let i=0;i<pts.length-1;i++){ let A=pts[i],B=pts[i+1]; nx.push({t:(A.t+B.t)/2,d:(A.d+B.d)/2+rnd()*rough*Math.pow(0.55,it)}); nx.push(B); } pts=nx; }
   return pts; }
-function lnRegenPaths(){ for(const L of laneList) L.td=lnGenPath((L.a*131+L.b*977+(CFG.gen.seed|0)*31)>>>0); lnNeedsPath=false; }
+function lnRegenPaths(){ for(const L of laneList) L.td=lnGenPath(L.pathSeed); lnNeedsPath=false; }
 function lnColor(L,which){ let C=CFG.lanes, k=L.kind,
       mode = k==='trans'?C.transColorMode : k==='uno'?C.unoColorMode : C.offColorMode;   // each lane type has its own color mode
   if(mode==='multi') return which?L.col2:L.col;
-  if(mode==='tier')  return LANE_TIER_COLS[Math.max(galaxy[L.a].tier,galaxy[L.b].tier)-1];
+  if(mode==='tier')  return LANE_TIER_COLS[Math.max(sysById(L.aId).tier,sysById(L.bId).tier)-1];
   return k==='trans'?C.transColor : k==='uno'?C.unoColor : C.offColor; }   // single: the type's own color
 function lnBeam(ax,ay,bx,by, laneOff, td, len0, ux,uy,nx,ny, col, st,w,op,glow,ef,cv){
   let C=CFG.lanes, dc=drawingContext;
@@ -479,7 +479,7 @@ function drawLanes(camX,camY,camZoom){
   let cx=(camX!==undefined)?camX:cam.x, cy=(camY!==undefined)?camY:cam.y, z=(camZoom!==undefined)?camZoom:cam.zoom;
   let px=(PANELW+width)/2, py=height/2, M=80;
   push(); blendMode(ADD);
-  for(const L of laneList){ let A=galaxy[L.a], B=galaxy[L.b];
+  for(const L of laneList){ let A=sysById(L.aId), B=sysById(L.bId); if(!A||!B) continue;
     let sA=DATUM.w2s(A.x,A.y,cx,cy,z,px,py), sB=DATUM.w2s(B.x,B.y,cx,cy,z,px,py), ax=sA.x,ay=sA.y,bx=sB.x,by=sB.y;
     if((ax<PANELW-M&&bx<PANELW-M)||(ax>width+M&&bx>width+M)||(ay<-M&&by<-M)||(ay>height+M&&by>height+M)) continue;   // cull off-screen
     lnDrawOne(L, ax,ay,bx,by, z); }
@@ -519,7 +519,7 @@ function trafRenderShips(a,b, ships, L, t, laneCol, lodF, z, wlen){
 }
 function trSmugglerPairs(L){ if(L._pairs) return L._pairs; let pairs=[], seen=new Set(), lo=L.minDist||300, hi=L.maxDist||650, lo2=lo*lo, hi2=hi*hi;
   for(let i=0;i<galaxy.length;i++){ let cand=[]; for(let j=0;j<galaxy.length;j++){ if(i===j)continue; let dx=galaxy[i].x-galaxy[j].x, dy=galaxy[i].y-galaxy[j].y, d2=dx*dx+dy*dy; if(d2>=lo2&&d2<hi2) cand.push({j,d2}); } cand.sort((a,b)=>a.d2-b.d2);
-    for(let k=0;k<Math.min(L.links||1,cand.length);k++){ let j=cand[k].j, key=i<j?i+'_'+j:j+'_'+i; if(seen.has(key))continue; seen.add(key); pairs.push([i,j]); } }
+    for(let k=0;k<Math.min(L.links||1,cand.length);k++){ let j=cand[k].j, key=i<j?i+'_'+j:j+'_'+i; if(seen.has(key))continue; seen.add(key); pairs.push([galaxy[i].id, galaxy[j].id]); } }   // pairs stored by id (Phase 2c)
   L._pairs=pairs; return pairs; }
 function drawTraffic(camX,camY,camZoom){
   let TC=CFG.traffic; if(!TC.on || !galaxy.length) return;
@@ -530,13 +530,13 @@ function drawTraffic(camX,camY,camZoom){
   push(); blendMode(ADD);
   for(const L of TC.layers){ if(!L.on) continue;
     if(L.kind==='smuggler'){ let pairs=trSmugglerPairs(L);
-      for(let pi=0;pi<pairs.length;pi++){ let A=galaxy[pairs[pi][0]], B=galaxy[pairs[pi][1]];
+      for(let pi=0;pi<pairs.length;pi++){ let A=sysById(pairs[pi][0]), B=sysById(pairs[pi][1]); if(!A||!B) continue;
         let sA=DATUM.w2s(A.x,A.y,cx,cy,z,px,py), sB=DATUM.w2s(B.x,B.y,cx,cy,z,px,py), ax=sA.x,ay=sA.y,bx=sB.x,by=sB.y;
         if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
         trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,pi), L, L.time||0, L.color, lodF, z, Math.hypot(B.x-A.x,B.y-A.y)); }
       continue; }
     for(let li=0;li<laneList.length;li++){ let lane=laneList[li]; if(lane.kind!==L.kind) continue;
-      let A=galaxy[lane.a], B=galaxy[lane.b];
+      let A=sysById(lane.aId), B=sysById(lane.bId); if(!A||!B) continue;
       let sA=DATUM.w2s(A.x,A.y,cx,cy,z,px,py), sB=DATUM.w2s(B.x,B.y,cx,cy,z,px,py), ax=sA.x,ay=sA.y,bx=sB.x,by=sB.y;
       if(off(ax,bx)||((ay<-M&&by<-M)||(ay>height+M&&by>height+M))) continue;
       trafRenderShips({x:ax,y:ay},{x:bx,y:by}, trGetShips(L,li), L, L.time||0, lnColor(lane,0), lodF, z, Math.hypot(B.x-A.x,B.y-A.y)); }
@@ -1024,14 +1024,14 @@ const GRID = (function(){
   function readout(camX,camY,camZoom){
     G=CFG.grid; setCam(camX,camY,camZoom);
     push(); blendMode(BLEND); let dc=drawingContext; dc.setLineDash([]);
-    if(G.coSystem){ if(mouseX>PANELW && mouseY>31){ let best=400, sel=null, idx=-1; for(let i=0;i<galaxy.length;i++){ let s=galaxy[i], p=proj(s.x,s.y), dx=p.x-mouseX, dy=p.y-mouseY, d=dx*dx+dy*dy; if(d<best){ best=d; sel=s; idx=i; } } coSelSys=sel; coSelSysId=idx; } } else coSelSys=null;
+    if(G.coSystem){ if(mouseX>PANELW && mouseY>31){ let best=400, sel=null, idx=-1; for(let i=0;i<galaxy.length;i++){ let s=galaxy[i], p=proj(s.x,s.y), dx=p.x-mouseX, dy=p.y-mouseY, d=dx*dx+dy*dy; if(d<best){ best=d; sel=s; idx=i; } } coSelSys=sel; coSelSysId=(sel?sel.id:-1); } } else coSelSys=null;   // by id (Phase 2c)
     if(G.coWaypoint && !coWp) coWp={ x:-_cx, y:-_cy };                            // first enable: drop at the view centre; click to move
     if(G.coWaypoint && coWp){ let p=proj(coWp.x,coWp.y); drawWaypoint(p.x,p.y); }
     if(G.coSystem && coSelSys){ let p=proj(coSelSys.x,coSelSys.y); dc.strokeStyle='rgba(255,220,120,0.95)'; dc.lineWidth=1.5; dc.beginPath(); dc.arc(p.x,p.y,9,0,Math.PI*2); dc.stroke(); }
     let T={};
     if(G.coMouse && mouseX>PANELW && mouseY>31){ let w=s2w(mouseX,mouseY); T.mouse={t:'MOUSE', wx:w.x, wy:w.y, sx:mouseX, sy:mouseY}; }
     if(G.coWaypoint && coWp){ let p=proj(coWp.x,coWp.y); T.wp={t:'WAYPOINT', wx:coWp.x, wy:coWp.y, sx:p.x, sy:p.y}; }
-    if(G.coSystem && coSelSys){ let p=proj(coSelSys.x,coSelSys.y); T.sys={t:'SYS #'+coSelSysId, wx:coSelSys.x, wy:coSelSys.y, sx:p.x, sy:p.y}; }
+    if(G.coSystem && coSelSys){ let p=proj(coSelSys.x,coSelSys.y); T.sys={t:'SYS '+coSelSysId, wx:coSelSys.x, wy:coSelSys.y, sx:p.x, sy:p.y}; }
     let ref = G.coRelative ? refPos(G.coRelFrom) : null, refS = ref ? proj(ref.x,ref.y) : null;
     let blocks=[];
     for(const k of ['mouse','wp','sys']){ let e=T[k]; if(!e) continue; let f=coFields(e.sx,e.sy,e.wx,e.wy);
@@ -1087,7 +1087,9 @@ function drawGalaxyView(){
 }
 
 // ---------- Phase 1: galaxy generation + camera ----------
-let galaxy = [];                        // [{x,y,tier,color,seed}]
+let galaxy = [];                        // [{id,x,y,tier,color,seed}]  — systems; Phase 2 target = a COORD Group of exact-click records
+let sysMap = new Map();                 // id -> system, rebuilt in generateGalaxy; resolves id-refs (lanes/traffic/readout) — array-index refs retired (Phase 2c)
+function sysById(id){ return sysMap.get(id); }
 let cam = { x: 0, y: 0, zoom: 0.35 };   // world offset + zoom for the galaxy view
 const SPECTRAL = [['M',[255,50,50]],['K',[255,140,0]],['G',[255,255,0]],['F',[240,240,255]],['B',[50,100,255]],['O',[150,50,255]]];
 function randomSpectral(g){
@@ -1114,9 +1116,10 @@ function generateGalaxy(g){
     } else {                               // IE (placeholder): uniform across the disc, no min-dist
       let a=random(TWO_PI), rr=R*Math.sqrt(random()); x=cos(a)*rr; y=sin(a)*rr;
     }
-    galaxy.push({ x, y, tier: tiers[placed]||1, color: randomSpectral(g), seed: placed*997+1 });
+    galaxy.push({ id:'S'+placed, x, y, tier: tiers[placed]||1, color: randomSpectral(g), seed: placed*997+1 });   // stable id (Phase 2b) — refs are by id, not array index
     placed++;
   }
+  sysMap = new Map(galaxy.map(s=>[s.id, s]));   // rebuild the id->system lookup for lane/traffic/readout refs
 }
 // ---------- baked sun sprites (per spectral-color cache) for VIEW GALAXY ----------
 const SUN_REF = 40, SUN_SPRITE_SZ = 640;   // sprite baked at radius SUN_REF; buffer holds the halos
