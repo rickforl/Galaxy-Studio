@@ -42,6 +42,8 @@
   #panel .hint{color:#5f6f8c;margin-top:10px;font-size:10px;line-height:1.4;}
   #panel .act-btn{width:100%;background:#16233b;color:#cdd9ef;border:1px solid #3a5a8c;font:11px 'Consolas',monospace;padding:5px;cursor:pointer;margin-top:10px;}
   #panel .act-btn:hover{background:#1e2f4d;}
+  input[type=number]{-moz-appearance:textfield;}
+  input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 </style>
 </head><body>
 <div id="topbar">
@@ -74,7 +76,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260727';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '02';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [20260727.02: moved the raw x/y/z systems table out of the Gen panel into an isolated preview-window overlay (#gen-preview) — full-width grid w/ column headers, like other tabs' previews; Gen panel keeps the gen params + a pointer]
+const BUILD_SEQ  = '03';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [20260727.03: tightened the systems grid + paginated it — 50/page as two side-by-side 25-row columns, prev/next pager, opens to the selected system's page]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -1961,37 +1963,47 @@ function buildNav(){
   }
 }
 // ---------- Phase 3d: raw x/y/z systems table (power-user editor in the Gen tab; shares editSelId with the map) ----------
-function buildSystemsTable(container){   // builds the raw-data grid into the #gen-preview overlay (isolated view, like other tabs)
-  let hdr=document.createElement('div'); hdr.style.cssText='display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid #23324e;background:#0b1119;';
-  let title=document.createElement('span'); title.className='lab'; title.style.cssText='flex:1;font-size:12px;color:#8fb0e0;font-weight:bold;'; title.textContent='Systems dataset · '+galaxy.length;
-  let addBtn=document.createElement('button'); addBtn.textContent='+ Add system'; addBtn.style.cssText='background:#16233b;color:#cdd9ef;border:1px solid #3a5a8c;font:inherit;font-size:11px;padding:4px 12px;cursor:pointer;';
-  addBtn.onclick=()=>{ addStarWorld(0,0); renderSystemsTable(); updateEditInspector(); let el=document.getElementById('sys-table'); if(el) el.scrollTop=el.scrollHeight; };
-  hdr.appendChild(title); hdr.appendChild(addBtn); container.appendChild(hdr);
-  let colh=document.createElement('div'); colh.style.cssText='display:flex;gap:8px;padding:5px 14px;font-size:10px;letter-spacing:.5px;opacity:.5;border-bottom:1px solid #172338;';
-  colh.innerHTML='<span style="width:44px;">SYS</span><span style="width:78px;text-align:right;">X</span><span style="width:78px;text-align:right;">Y</span><span style="width:78px;text-align:right;">Z</span><span style="width:44px;text-align:center;">TIER</span><span style="flex:1;"></span><span style="opacity:.7;">clicks · 1 = 1 unit</span>';
+let genPage=0;   // current page in the paginated systems grid (50/page → two 25-row columns)
+function buildSystemsTable(container){   // raw-data grid in the #gen-preview overlay: tight rows, paginated 50/page into two 25-row columns
+  if(editSelId!=null){ let idx=galaxy.findIndex(s=>s.id===editSelId); if(idx>=0) genPage=Math.floor(idx/50); }   // open to the selected system's page (two-way with the map)
+  let hdr=document.createElement('div'); hdr.style.cssText='display:flex;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid #23324e;background:#0b1119;';
+  let title=document.createElement('span'); title.className='lab'; title.style.cssText='font-size:12px;color:#8fb0e0;font-weight:bold;white-space:nowrap;'; title.textContent='Systems dataset · '+galaxy.length;
+  let pbtn=(t)=>{ let b=document.createElement('button'); b.textContent=t; b.style.cssText='background:#16233b;color:#cdd9ef;border:1px solid #3a5a8c;font:inherit;font-size:13px;line-height:1;padding:2px 9px;cursor:pointer;'; return b; };
+  let pager=document.createElement('div'); pager.style.cssText='display:flex;align-items:center;gap:6px;flex:1;';
+  let prev=pbtn('‹'); prev.onclick=()=>{ genPage=Math.max(0,genPage-1); renderSystemsTable(); };
+  let plabel=document.createElement('span'); plabel.className='pglabel'; plabel.style.cssText='opacity:.75;min-width:82px;text-align:center;font-size:11px;';
+  let next=pbtn('›'); next.onclick=()=>{ genPage=Math.min(Math.max(1,Math.ceil(galaxy.length/50))-1, genPage+1); renderSystemsTable(); };
+  pager.appendChild(prev); pager.appendChild(plabel); pager.appendChild(next);
+  let addBtn=document.createElement('button'); addBtn.textContent='+ Add system'; addBtn.style.cssText='background:#16233b;color:#cdd9ef;border:1px solid #3a5a8c;font:inherit;font-size:11px;padding:4px 12px;cursor:pointer;white-space:nowrap;';
+  addBtn.onclick=()=>{ addStarWorld(0,0); genPage=Math.max(0,Math.ceil(galaxy.length/50)-1); renderSystemsTable(); updateEditInspector(); };
+  hdr.appendChild(title); hdr.appendChild(pager); hdr.appendChild(addBtn); container.appendChild(hdr);
+  let colGroup='<div style="display:flex;gap:4px;padding:0 8px;"><span style="width:28px;">SYS</span><span style="width:62px;text-align:right;">X</span><span style="width:62px;text-align:right;">Y</span><span style="width:62px;text-align:right;">Z</span><span style="width:22px;text-align:center;">TIER</span><span style="width:24px;"></span></div>';
+  let colh=document.createElement('div'); colh.style.cssText='display:flex;gap:14px;padding:5px 14px 4px;font-size:10px;letter-spacing:.5px;opacity:.5;border-bottom:1px solid #172338;'; colh.innerHTML=colGroup+colGroup;
   container.appendChild(colh);
-  let scroll=document.createElement('div'); scroll.id='sys-table'; scroll.style.cssText='flex:1;overflow-y:auto;';
-  scroll.addEventListener('change', e=>{ let inp=e.target; if(inp.dataset&&inp.dataset.sid!=null&&inp.dataset.axis) setSysAxis(inp.dataset.sid, inp.dataset.axis, inp.value); });
-  scroll.addEventListener('click', e=>{ let del=e.target.closest('[data-del]'); if(del){ deleteSysById(del.dataset.del); renderSystemsTable(); updateEditInspector(); return; }
+  let body=document.createElement('div'); body.id='sys-table'; body.style.cssText='flex:1;overflow:auto;display:flex;gap:14px;padding:0 14px;align-items:flex-start;';
+  body.addEventListener('change', e=>{ let inp=e.target; if(inp.dataset&&inp.dataset.sid!=null&&inp.dataset.axis) setSysAxis(inp.dataset.sid, inp.dataset.axis, inp.value); });
+  body.addEventListener('click', e=>{ let del=e.target.closest('[data-del]'); if(del){ deleteSysById(del.dataset.del); renderSystemsTable(); updateEditInspector(); return; }
     let row=e.target.closest('[data-row]'); if(row && e.target.tagName!=='INPUT'){ editSelId=row.dataset.row; highlightSystemsRow(); updateEditInspector(); } });
-  container.appendChild(scroll);
+  container.appendChild(body);
   renderSystemsTable();
 }
 function renderSystemsTable(){
   let el=document.getElementById('sys-table'); if(!el) return;
-  let inp=(id,ax,v)=>'<input data-sid="'+id+'" data-axis="'+ax+'" type="number" step="1" value="'+v+'" style="box-sizing:border-box;width:78px;background:#0c1018;color:#e6edfb;border:1px solid #2a3550;border-radius:3px;font:inherit;font-size:11px;padding:2px 4px;text-align:right;">';
-  let rows='';
-  for(const s of galaxy){ let c=FIXPT.posTo(s.position), sel=(s.id===editSelId);
-    rows+='<div data-row="'+s.id+'" style="display:flex;align-items:center;gap:8px;padding:3px 14px;border-bottom:1px solid #131e30;'+(sel?'background:#1c3a66;':'')+'cursor:pointer;">'+
-      '<span data-idcell style="width:44px;opacity:.9;color:'+(sel?'#ffd77a':'#9fb4d8')+';">'+s.id+'</span>'+
+  let per=50, mp=Math.max(1,Math.ceil(galaxy.length/per)); genPage=Math.min(Math.max(0,genPage),mp-1);
+  let page=galaxy.slice(genPage*per, genPage*per+per);
+  let inp=(id,ax,v)=>'<input data-sid="'+id+'" data-axis="'+ax+'" type="number" step="1" value="'+v+'" style="box-sizing:border-box;width:62px;background:#0c1018;color:#e6edfb;border:1px solid #2a3550;border-radius:3px;font:inherit;font-size:11px;padding:1px 3px;text-align:right;">';
+  let rowHtml=(s)=>{ let c=FIXPT.posTo(s.position), sel=(s.id===editSelId);
+    return '<div data-row="'+s.id+'" style="display:flex;align-items:center;gap:4px;padding:2px 8px;border-bottom:1px solid #131e30;'+(sel?'background:#1c3a66;':'')+'cursor:pointer;">'+
+      '<span data-idcell style="width:28px;opacity:.9;color:'+(sel?'#ffd77a':'#9fb4d8')+';">'+s.id+'</span>'+
       inp(s.id,'x',c.x)+inp(s.id,'y',c.y)+inp(s.id,'z',c.z)+
-      '<span style="width:44px;text-align:center;opacity:.6;">T'+s.tier+'</span>'+
-      '<span style="flex:1;"></span>'+
-      '<button data-del="'+s.id+'" title="Delete system" style="background:#5a2130;color:#ffd0d0;border:1px solid #8c3a4a;border-radius:3px;font:inherit;font-size:11px;line-height:1;padding:3px 9px;cursor:pointer;">&times;</button>'+
-    '</div>';
-  }
-  el.innerHTML=rows||'<div style="padding:12px;opacity:.6;">No systems — use + Add system.</div>';
-  let t=el.parentNode&&el.parentNode.querySelector('.lab'); if(t) t.textContent='Systems dataset · '+galaxy.length;
+      '<span style="width:22px;text-align:center;opacity:.6;">T'+s.tier+'</span>'+
+      '<button data-del="'+s.id+'" title="Delete" style="width:24px;background:#5a2130;color:#ffd0d0;border:1px solid #8c3a4a;border-radius:3px;font:inherit;font-size:11px;line-height:1;padding:1px 0;cursor:pointer;">&times;</button>'+
+    '</div>'; };
+  let col=(arr)=>'<div style="flex:0 0 auto;">'+arr.map(rowHtml).join('')+'</div>';
+  el.innerHTML = page.length ? (col(page.slice(0,25))+(page.length>25?col(page.slice(25,50)):'')) : '<div style="padding:12px;opacity:.6;">No systems — use + Add system.</div>';
+  let hdr=el.parentNode;
+  let t=hdr&&hdr.querySelector('.lab'); if(t) t.textContent='Systems dataset · '+galaxy.length;
+  let pl=hdr&&hdr.querySelector('.pglabel'); if(pl) pl.textContent='Page '+(genPage+1)+' / '+mp;
 }
 function highlightSystemsRow(){
   let el=document.getElementById('sys-table'); if(!el) return;
