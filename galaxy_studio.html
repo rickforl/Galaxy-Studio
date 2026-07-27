@@ -73,7 +73,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260726';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '05';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.05: Phase 3a — galaxy edit mode: opt-in Edit toggle, click-to-select a star on the map (pan/zoom preserved), selection ring + inspector (id/x/y/z clicks/tier/color)]
+const BUILD_SEQ  = '06';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.06: Phase 3b — edit-mode MOVE: drag a star (offset-preserving grab; lane endpoints follow live, topology rebuilds on release) + numeric x/y/z inspector inputs; canonical stays truth; sets galaxyAuthored/'hand-edited' provenance (session-live; autosave-persist deferred)]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -249,7 +249,7 @@ function setup(){
 function windowResized(){ resizeCanvas(windowWidth, windowHeight); invalidateStars(); }
 
 let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
-let editMode=false, editSelId=null;   // Phase 3a: opt-in galaxy authoring toggle + selected system id
+let editMode=false, editSelId=null, editDrag=null, galaxyAuthored=false;   // Phase 3a/3b: opt-in authoring toggle + selected id + active drag-grab + "diverged from procedural" flag
 let fullscreen = false, infoOverlay = true;   // fullscreen galaxy (Esc to exit); info overlay = subtle build+fps bottom-left (toggle with i)
 let lastInteract = -99999;  // ms of the last pan/zoom — used to defer the expensive nebula re-render while interacting
 function draw(){
@@ -1135,6 +1135,7 @@ function generateGalaxy(g){
   }
   sysMap = new Map(galaxy.map(s=>[s.id, s]));   // rebuild the id->system lookup for lane/traffic/readout refs
   galaxyMeta.meta = { seed: g.seed|0, starCount: galaxy.length, generatedBy:'procedural' };   // provenance travels with the Group
+  galaxyAuthored=false;   // a fresh procedural galaxy is seed-reproducible (not hand-edited) — resets the divergence flag
 }
 // ---------- baked sun sprites (per spectral-color cache) for VIEW GALAXY ----------
 const SUN_REF = 40, SUN_SPRITE_SZ = 640;   // sprite baked at radius SUN_REF; buffer holds the halos
@@ -1342,16 +1343,23 @@ function drawBackdrop(parallax){                                              //
 function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); invalidateLanes(); invalidateTraffic(); }   // radius change -> extent change -> re-bake + relink
 function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); regenerate(); }
 let gPressPt=null;   // grid-waypoint click-vs-drag tracking
-function mousePressed(){ gPressPt={x:mouseX,y:mouseY};
+function mousePressed(){ gPressPt={x:mouseX,y:mouseY}; editDrag=null;
+  if(editMode && viewMode==='galaxy' && mouseX>PANELW){ let hit=pickStar(mouseX,mouseY); if(hit){ let w=screenToWorld(mouseX,mouseY); editDrag={id:hit.id,moved:false,ox:hit.x-w.x,oy:hit.y-w.y}; editSelId=hit.id; updateEditInspector(); } return; }   // 3b: grab a star (press = select; drag = move; empty = pan)
   if(viewMode==='galaxy'||activePage!=='traffic'||trafEditIdx==null||mouseX<=PANELW) return;   // edit-grid cell click -> pick a style
   let L=CFG.traffic.layers[trafEditIdx]; if(!L) return;
   for(const cell of trafEditCells()){ if(mouseX>=cell.x&&mouseX<=cell.x+cell.w&&mouseY>=cell.y&&mouseY<=cell.y+cell.h){ if(L.style!==cell.style){ L.style=cell.style; showPage(); } return; } } }
-function mouseReleased(){   // a click (not a drag): edit mode selects a star; otherwise drops the grid waypoint
+function mouseReleased(){   // edit mode: finish a grab (move committed on drag; select on press); else grid waypoint on a click
   let click = gPressPt && Math.hypot(mouseX-gPressPt.x,mouseY-gPressPt.y)<5;
-  if(editMode && viewMode==='galaxy' && mouseX>PANELW && click){ let hit=pickStar(mouseX,mouseY); editSelId=hit?hit.id:null; updateEditInspector(); gPressPt=null; return; }   // edit mode owns clicks (waypoint suppressed)
+  if(editMode && viewMode==='galaxy' && mouseX>PANELW){
+    if(editDrag){ if(editDrag.moved) lnNeedsBuild=true; editDrag=null; gPressPt=null; return; }   // moved -> rebuild lane topology once (endpoints already followed live)
+    if(click){ editSelId=null; updateEditInspector(); }                                           // click on empty -> deselect
+    gPressPt=null; return;
+  }
   if(click && CFG.grid.coWaypoint && mouseX>PANELW && (activePage==='grid' || (viewMode==='galaxy' && CFG.grid.on))) GRID.dropWaypoint(mouseX,mouseY);
-  gPressPt=null; }
-function mouseDragged(){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; lastInteract=millis(); } }
+  gPressPt=null; editDrag=null; }
+function mouseDragged(){
+  if(editDrag){ moveEditStar(mouseX,mouseY); return; }                                   // 3b: grabbed a star -> move it (not pan)
+  if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; lastInteract=millis(); } }
 function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); lastInteract=millis(); return false; } }
 // ---------- Touch (mobile): 1-finger pan, 2-finger pinch-zoom, tap = grid waypoint. Mirrors the mouse handlers; returning false = preventDefault (no page scroll/zoom, no synthesized mouse events -> no double-handling) ----------
 let _tPrev=null, _tPinch=0, _tStart=null, _tMoved=false, _tActive=false;
@@ -1361,37 +1369,59 @@ function touchStarted(){
   _tActive = (viewMode==='galaxy' && t0.x>PANELW);          // does this gesture belong to the galaxy canvas? (not the panel / topbar)
   if(!_tActive) return;                                     // panel area -> let the DOM handle scroll / control taps natively
   if(touches.length>=2){ _tPinch=Math.hypot(touches[0].x-touches[1].x, touches[0].y-touches[1].y); _tPrev=null; }
-  else { _tPrev={x:t0.x,y:t0.y}; _tStart={x:t0.x,y:t0.y}; _tMoved=false; _tPinch=0; }
+  else { _tPrev={x:t0.x,y:t0.y}; _tStart={x:t0.x,y:t0.y}; _tMoved=false; _tPinch=0; editDrag=null;
+    if(editMode && viewMode==='galaxy'){ let hit=pickStar(t0.x,t0.y); if(hit){ let w=screenToWorld(t0.x,t0.y); editDrag={id:hit.id,moved:false,ox:hit.x-w.x,oy:hit.y-w.y}; editSelId=hit.id; updateEditInspector(); } } }   // 3b: grab a star on touch
   lastInteract=millis(); return false;
 }
 function touchMoved(){
   if(!_tActive || !touches.length) return;
   if(touches.length>=2){                                    // pinch -> zoom (same multiplicative model as the wheel)
+    editDrag=null;                                          // a 2nd finger cancels a star grab
     let d=Math.hypot(touches[0].x-touches[1].x, touches[0].y-touches[1].y);
     if(_tPinch>0) cam.zoom=constrain(cam.zoom*(d/_tPinch), 0.05, 6);
     _tPinch=d; _tPrev=null; _tMoved=true;
-  } else if(_tPrev){                                         // drag -> pan (world-space delta, like mouseDragged)
+  } else if(_tPrev){                                         // 1 finger: move a grabbed star, else pan
     let t0=touches[0];
-    cam.x += (t0.x-_tPrev.x)/cam.zoom; cam.y += (t0.y-_tPrev.y)/cam.zoom;
-    _tPrev={x:t0.x,y:t0.y};
-    if(_tStart && Math.hypot(t0.x-_tStart.x, t0.y-_tStart.y)>8) _tMoved=true;
+    if(editDrag){ moveEditStar(t0.x,t0.y); _tMoved=true; _tPrev={x:t0.x,y:t0.y}; }               // 3b: grabbed -> move star
+    else { cam.x += (t0.x-_tPrev.x)/cam.zoom; cam.y += (t0.y-_tPrev.y)/cam.zoom; _tPrev={x:t0.x,y:t0.y};
+      if(_tStart && Math.hypot(t0.x-_tStart.x, t0.y-_tStart.y)>8) _tMoved=true; }
   }
   lastInteract=millis(); return false;
 }
 function touchEnded(){
-  if(_tActive && _tStart && !_tMoved && _tStart.x>PANELW){    // tap (no drag) on the canvas
-    if(editMode && viewMode==='galaxy'){ let hit=pickStar(_tStart.x,_tStart.y); editSelId=hit?hit.id:null; updateEditInspector(); }   // edit mode: select a star (waypoint suppressed)
-    else if(CFG.grid.coWaypoint && (activePage==='grid' || (viewMode==='galaxy' && CFG.grid.on))) GRID.dropWaypoint(_tStart.x, _tStart.y);   // else drop the grid waypoint (mirrors mouseReleased)
+  if(editMode && viewMode==='galaxy' && _tActive){
+    if(editDrag){ if(editDrag.moved) lnNeedsBuild=true; }                                         // moved a star -> rebuild lane topology (select happened on touchStarted)
+    else if(_tStart && !_tMoved && _tStart.x>PANELW){ editSelId=null; updateEditInspector(); }    // tap on empty -> deselect
+  } else if(_tActive && _tStart && !_tMoved && _tStart.x>PANELW && CFG.grid.coWaypoint && (activePage==='grid' || (viewMode==='galaxy' && CFG.grid.on))){
+    GRID.dropWaypoint(_tStart.x, _tStart.y);                                                      // non-edit tap = grid waypoint (mirrors mouseReleased)
   }
   if(!touches.length){ _tActive=false; _tPrev=null; _tStart=null; _tMoved=false; _tPinch=0; }                 // all fingers up -> reset
   else if(touches.length===1 && _tActive){ _tPrev={x:touches[0].x,y:touches[0].y}; _tStart=null; _tPinch=0; }  // 2->1 finger -> resume panning from the remaining finger
   return _tActive ? false : undefined;
 }
-// ---------- Phase 3a: galaxy edit mode (select a star on the map + inspector) ----------
+// ---------- Phase 3a/3b: galaxy edit mode (select + drag/numeric move a star on the map) ----------
 function pickStar(mx,my){             // nearest system to a screen point within a pixel radius (mirrors the galaxy-view projection); null if none
   let px=(PANELW+width)/2, py=height/2, z=cam.zoom, best=Infinity, hit=null, R=16;
   for(const s of galaxy){ let p=DATUM.w2s(s.x,s.y,cam.x,cam.y,z,px,py), dx=p.x-mx, dy=p.y-my, d=dx*dx+dy*dy; if(d<best){ best=d; hit=s; } }
   return best<=R*R ? hit : null;
+}
+function screenToWorld(mx,my){ return DATUM.s2w(mx,my,cam.x,cam.y,cam.zoom,(PANELW+width)/2,height/2); }
+function markAuthored(){ galaxyAuthored=true; if(galaxyMeta&&galaxyMeta.meta) galaxyMeta.meta.generatedBy='hand-edited'; }   // 3b: dataset diverged from procedural (provenance + the future autosave gate)
+function setSysPos(s, wx, wy, wz){    // move a system: canonical (0.01-click) = truth, x/y = its exact shadow (render is 2D; z lives in canonical). pass null to keep an axis
+  let cur=FIXPT.posTo(s.position);
+  let pos=FIXPT.posFrom({ x:(wx==null?cur.x:wx), y:(wy==null?cur.y:wy), z:(wz==null?cur.z:wz) }), c=FIXPT.posTo(pos);
+  s.position=pos; s.x=c.x; s.y=c.y;
+}
+function moveEditStar(mx,my){         // live drag: keep the grabbed star under the cursor (offset-preserving). Lane endpoints follow live; topology rebuilds on release
+  let s=editDrag&&sysById(editDrag.id); if(!s) return;
+  let w=screenToWorld(mx,my); setSysPos(s, w.x+editDrag.ox, w.y+editDrag.oy);
+  editDrag.moved=true; markAuthored(); lastInteract=millis(); syncInspectorValues();
+}
+function commitAxis(ax, val){         // numeric inspector edit: move one axis to a typed click value
+  let s=(editSelId!=null)?sysById(editSelId):null; if(!s){ updateEditInspector(); return; }
+  let v=parseFloat(val); if(!isFinite(v)){ updateEditInspector(); return; }
+  setSysPos(s, ax==='x'?v:null, ax==='y'?v:null, ax==='z'?v:null);
+  markAuthored(); lnNeedsBuild=true; updateEditInspector();
 }
 function toggleEdit(){
   editMode=!editMode;
@@ -1399,18 +1429,26 @@ function toggleEdit(){
   let b=document.getElementById('edit-btn'); if(b){ b.style.background=editMode?'#2a6cff':''; b.style.color=editMode?'#fff':''; }
   updateEditInspector();
 }
+function syncInspectorValues(){       // light: update just the axis inputs during a live drag (no innerHTML rebuild -> no focus/DOM thrash)
+  let el=document.getElementById('edit-inspector'); if(!el||!editMode) return;
+  let s=(editSelId!=null)?sysById(editSelId):null; if(!s) return;
+  let c=FIXPT.posTo(s.position);
+  ['x','y','z'].forEach(ax=>{ let inp=el.querySelector('[data-axis="'+ax+'"]'); if(inp && document.activeElement!==inp) inp.value=c[ax]; });
+}
 function updateEditInspector(){
   let el=document.getElementById('edit-inspector'); if(!el) return;
   if(!editMode){ el.style.display='none'; return; }
   el.style.display='block';
   let s=(editSelId!=null)?sysById(editSelId):null;
-  if(!s){ el.innerHTML='<div style="font-weight:bold;color:#8fb4ff;margin-bottom:5px;">&#9998; EDIT MODE</div><div style="opacity:.65;line-height:1.4;">Click a star to select.<br>Drag empty space to pan · wheel to zoom.</div>'; return; }
+  if(!s){ el.innerHTML='<div style="font-weight:bold;color:#8fb4ff;margin-bottom:5px;">&#9998; EDIT MODE</div><div style="opacity:.65;line-height:1.4;">Click a star to select.<br>Drag it to move · drag empty space to pan.</div>'; return; }
   let c=FIXPT.posTo(s.position);
-  let row=(k,v)=>'<div style="display:flex;justify-content:space-between;padding:1px 0;"><span style="opacity:.65;">'+k+'</span><b style="color:#e6edfb;">'+v+'</b></div>';
-  el.innerHTML='<div style="font-weight:bold;color:#8fb4ff;letter-spacing:.5px;margin-bottom:6px;">&#9998; '+s.id+'</div>'+
-    row('x',c.x)+row('y',c.y)+row('z',c.z)+row('tier',s.tier)+row('seed',s.seed)+
+  let axis=(k,v)=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:1px 0;"><span style="opacity:.65;">'+k+'</span><input data-axis="'+k+'" type="number" step="1" value="'+v+'" style="width:98px;background:#0c1018;color:#e6edfb;border:1px solid #2a3550;border-radius:3px;font:inherit;font-size:11px;padding:1px 4px;text-align:right;"></div>';
+  let meta=(k,v)=>'<div style="display:flex;justify-content:space-between;padding:1px 0;"><span style="opacity:.65;">'+k+'</span><b style="color:#e6edfb;">'+v+'</b></div>';
+  el.innerHTML='<div style="font-weight:bold;color:#8fb4ff;letter-spacing:.5px;margin-bottom:6px;">&#9998; '+s.id+(galaxyAuthored?' <span style="opacity:.6;font-weight:normal;">· edited</span>':'')+'</div>'+
+    axis('x',c.x)+axis('y',c.y)+axis('z',c.z)+meta('tier',s.tier)+meta('seed',s.seed)+
     '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;"><span style="opacity:.65;">color</span><span style="flex:1;height:12px;border-radius:2px;background:rgb('+s.color.map(v=>v|0).join(',')+');"></span></div>'+
-    '<div style="opacity:.5;margin-top:7px;line-height:1.35;">clicks · 1 = 1 world unit<br>drag-to-move lands in 3b</div>';
+    '<div style="opacity:.5;margin-top:7px;line-height:1.35;">clicks · 1 = 1 world unit<br>drag on the map, or type a value</div>';
+  ['x','y','z'].forEach(ax=>{ let inp=el.querySelector('[data-axis="'+ax+'"]'); if(inp){ inp.onchange=()=>commitAxis(ax, inp.value); inp.onkeydown=(e)=>{ if(e.key==='Enter') inp.blur(); }; } });
 }
 function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); }
 function updateModeBtn(){ let b=document.getElementById('mode-btn'); if(b) b.innerHTML = (viewMode==='options') ? '&#9654; VIEW GALAXY' : '&#9664; OPTIONS'; }
@@ -1487,7 +1525,7 @@ function datasetImport(data){                                   // reconstruct t
     return { id:r.id, position:pos, x:wc.x, y:wc.y, tier:(r.tier!=null?r.tier:1), color:(Array.isArray(r.color)?r.color.slice():[200,200,200]), seed:(r.seed!=null?r.seed:0) }; });
   sysMap=new Map(galaxy.map(s=>[s.id,s]));
   galaxyMeta={ id:g.id||'galaxy', name:g.name||'Galaxy', anchorMode:g.anchorMode||'origin', version:g.version||'', meta:g.meta||{} };
-  lnNeedsBuild=true; sfNeedGen=true; sfDirty=true; invalidateSunSprites(); invalidateBackdrop();   // re-bake lanes/starfield/suns/backdrop to the restored systems
+  galaxyAuthored=true; lnNeedsBuild=true; sfNeedGen=true; sfDirty=true; invalidateSunSprites(); invalidateBackdrop();   // re-bake lanes/starfield/suns/backdrop to the restored systems (imported = an authored dataset, not seed-reproducible)
   return true;
 }
 function exportDataset(){
