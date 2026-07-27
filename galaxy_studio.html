@@ -76,7 +76,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260727';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '06';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260727.06: embedded the new Y-up authored DEFAULT galaxy (0727 export: seed 70141, hex grid, worldSpec-stamped) -- replaces the old mirrored default]
+const BUILD_SEQ  = '07';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260727.07: FIX Y-up grid regression — GRID.VIS() returned reversed y-range (s2w flips screen->world y under Y-up) so square horizontal lines + hex rows never drew (loops iterate y0..y1); VIS now normalizes min/max]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -825,7 +825,7 @@ const GRID = (function(){
   const POLAR_ZERO={ east:0, north:-90, west:180, south:90 };
   function setCam(camX,camY,camZoom){ _cx=(camX!==undefined)?camX:cam.x; _cy=(camY!==undefined)?camY:cam.y; _z=(camZoom!==undefined)?camZoom:cam.zoom; _px=(PANELW+width)/2; _py=height/2; _bx0=PANELW;_by0=0;_bx1=width;_by1=height; }
   function S(wx,wy){ return DATUM.w2s(wx,wy,_cx,_cy,_z,_px,_py); }            // world -> screen (same projection as the galaxy view)
-  function VIS(){ let p0=DATUM.s2w(_bx0,_by0,_cx,_cy,_z,_px,_py), p1=DATUM.s2w(_bx1,_by1,_cx,_cy,_z,_px,_py); return { x0:p0.x, x1:p1.x, y0:p0.y, y1:p1.y }; }   // visible world rect within the target's pixel bounds
+  function VIS(){ let p0=DATUM.s2w(_bx0,_by0,_cx,_cy,_z,_px,_py), p1=DATUM.s2w(_bx1,_by1,_cx,_cy,_z,_px,_py); return { x0:Math.min(p0.x,p1.x), x1:Math.max(p0.x,p1.x), y0:Math.min(p0.y,p1.y), y1:Math.max(p0.y,p1.y) }; }   // visible world rect — NORMALIZED to min/max (Y-up flips s2w's screen->world y, so the raw top/bottom come reversed; square/hex range loops iterate y0..y1 and need y0<=y1)
   function RAD(){ return CFG.gen.radius; }                                       // grid coordinate radius = the galaxy radius
   function iso2s(wx,wy,wz){ let a=G.isoRot*Math.PI/180, rx=wx*Math.cos(a)-wy*Math.sin(a), ry=wx*Math.sin(a)+wy*Math.cos(a);
     let ix=(rx-ry)*ISO_COS, iy=(rx+ry)*ISO_SIN*G.isoPitch-(wz||0);
