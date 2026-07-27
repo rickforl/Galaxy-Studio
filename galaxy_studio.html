@@ -72,8 +72,8 @@
 // ===================================================================
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
-const BUILD_DATE = '20260726';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '08';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [.08: snap upgraded to true per-grid geometry (square/iso lattice, polar rings×spokes, hex offset-lattice) mirroring GRID's world-space math + a snap-target cycle: Center / Cross (line crossings & hex vertices) / Near]
+const BUILD_DATE = '20260727';     // build day — reset SEQ to '01' on a new day
+const BUILD_SEQ  = '01';           // per-day build sequencer — bump each build (01, 02, 03, ...)   [20260727.01: Phase 3d — raw x/y/z systems table in the Gen tab (power-user editor: per-row editable clicks + tier, delete, +Add, click-to-select shared with the map via editSelId). Phase 3 COMPLETE.]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -1432,19 +1432,19 @@ function snapWorld(wx,wy){ if(!editSnap) return {x:wx,y:wy}; let t=(CFG.grid&&CF
   return t==='hex'?snapHex(wx,wy,editSnapTo):t==='polar'?snapPolar(wx,wy,editSnapTo):snapSquare(wx,wy,editSnapTo); }   // square + iso share the square lattice
 function toggleSnapTo(){ editSnapTo=(editSnapTo==='center')?'line':(editSnapTo==='line')?'nearest':'center'; updateEditInspector(); }
 function newSysId(){ let mx=-1; for(const s of galaxy){ let m=/^S(\d+)$/.exec(s.id); if(m){ let n=+m[1]; if(n>mx) mx=n; } } return 'S'+(mx+1); }   // next free S<n> (unique across the current set, delete-safe)
-function addStarAt(mx,my){            // 3c: place a new system at a screen point (snapped if enabled), select it, keep add-mode armed
-  let w=screenToWorld(mx,my), sp=snapWorld(w.x,w.y), id=newSysId(), num=+id.slice(1);
-  let pos=FIXPT.posFrom({x:sp.x,y:sp.y,z:0}), c=FIXPT.posTo(pos);
+function addStarWorld(wx,wy){         // 3c/3d: create a system at WORLD coords, select it (shared by map-add + the table)
+  let id=newSysId(), num=+id.slice(1), pos=FIXPT.posFrom({x:wx,y:wy,z:0}), c=FIXPT.posTo(pos);
   let s={ id, position:pos, x:c.x, y:c.y, tier:1, color:randomSpectral(CFG.gen), seed:num*997+1 };
-  galaxy.push(s); sysMap.set(id, s); editSelId=id;
-  markAuthored(); lnNeedsBuild=true; lastInteract=millis(); updateEditInspector();
+  galaxy.push(s); sysMap.set(id, s); editSelId=id; markAuthored(); lnNeedsBuild=true; return s;
 }
-function deleteSelStar(){             // 3c: remove the selected system (lanes/traffic guard by id + rebuild)
-  if(editSelId==null) return;
-  let i=galaxy.findIndex(s=>s.id===editSelId); if(i<0) return;
-  galaxy.splice(i,1); sysMap.delete(editSelId); editSelId=null; editDrag=null;
-  markAuthored(); lnNeedsBuild=true; updateEditInspector();
+function addStarAt(mx,my){            // 3c: place at a screen point (snapped if enabled); keeps add-mode armed
+  let w=screenToWorld(mx,my), sp=snapWorld(w.x,w.y); addStarWorld(sp.x,sp.y); lastInteract=millis(); updateEditInspector();
 }
+function deleteSysById(sid){          // 3c/3d: remove a system by id (lanes/traffic guard by id + rebuild)
+  let i=galaxy.findIndex(s=>s.id===sid); if(i<0) return;
+  galaxy.splice(i,1); sysMap.delete(sid); if(editSelId===sid) editSelId=null; markAuthored(); lnNeedsBuild=true;
+}
+function deleteSelStar(){ if(editSelId==null) return; deleteSysById(editSelId); editDrag=null; updateEditInspector(); }
 function toggleAdd(){ editAdd=!editAdd; if(editAdd) editDrag=null; updateEditInspector(); }
 function toggleSnap(){ editSnap=!editSnap; updateEditInspector(); }
 function setSysPos(s, wx, wy, wz){    // move a system: canonical (0.01-click) = truth, x/y = its exact shadow (render is 2D; z lives in canonical). pass null to keep an axis
@@ -1936,7 +1936,7 @@ const GRID_PRESETS = {
 let gridPreset='';
 const PAGES = [
   { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true, onChange: invalidateSunSprites },
-  { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: regenerate },
+  { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: ()=>{ regenerate(); renderSystemsTable(); } },
   { id:'backdrop', label:'Backdrop',   schema: BACKDROP_SCHEMA, target: ()=>CFG.backdrop, onChange: invalidateBackdrop },
   { id:'stars',    label:'Stars',      schema: [], target: ()=>CFG.stars, custom:'stars' },
   { id:'lanes',    label:'Lanes',      schema: LANES_SCHEMA, target: ()=>CFG.lanes, lanePresets:true, onChange: onLaneChange },
@@ -1957,6 +1957,45 @@ function buildNav(){
     nav.appendChild(b);
   }
 }
+// ---------- Phase 3d: raw x/y/z systems table (power-user editor in the Gen tab; shares editSelId with the map) ----------
+function buildSystemsTable(body){
+  let wrap=document.createElement('div'); wrap.style.marginTop='12px';
+  let hdr=document.createElement('div'); hdr.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:5px;';
+  let title=document.createElement('span'); title.className='lab'; title.style.flex='1'; title.textContent='Systems · '+galaxy.length;
+  let addBtn=document.createElement('button'); addBtn.className='act-btn'; addBtn.textContent='+ Add'; addBtn.style.cssText='padding:2px 10px;font-size:11px;';
+  addBtn.onclick=()=>{ addStarWorld(0,0); renderSystemsTable(); updateEditInspector(); let el=document.getElementById('sys-table'); if(el) el.scrollTop=el.scrollHeight; };
+  hdr.appendChild(title); hdr.appendChild(addBtn); wrap.appendChild(hdr);
+  let scroll=document.createElement('div'); scroll.id='sys-table'; scroll.style.cssText='max-height:340px;overflow-y:auto;border:1px solid #23324e;border-radius:4px;background:#0a0e16;';
+  scroll.addEventListener('change', e=>{ let inp=e.target; if(inp.dataset&&inp.dataset.sid!=null&&inp.dataset.axis) setSysAxis(inp.dataset.sid, inp.dataset.axis, inp.value); });
+  scroll.addEventListener('click', e=>{ let del=e.target.closest('[data-del]'); if(del){ deleteSysById(del.dataset.del); renderSystemsTable(); updateEditInspector(); return; }
+    let row=e.target.closest('[data-row]'); if(row && e.target.tagName!=='INPUT'){ editSelId=row.dataset.row; highlightSystemsRow(); updateEditInspector(); } });
+  wrap.appendChild(scroll); body.appendChild(wrap);
+  renderSystemsTable();
+}
+function renderSystemsTable(){
+  let el=document.getElementById('sys-table'); if(!el) return;
+  let inp=(id,ax,v)=>'<input data-sid="'+id+'" data-axis="'+ax+'" type="number" step="1" value="'+v+'" style="width:58px;background:#0c1018;color:#e6edfb;border:1px solid #2a3550;border-radius:3px;font:inherit;font-size:11px;padding:1px 3px;text-align:right;">';
+  let rows='';
+  for(const s of galaxy){ let c=FIXPT.posTo(s.position), sel=(s.id===editSelId);
+    rows+='<div data-row="'+s.id+'" style="display:flex;align-items:center;gap:4px;padding:2px 5px;border-bottom:1px solid #172338;'+(sel?'background:#1c3a66;':'')+'cursor:pointer;">'+
+      '<span data-idcell style="width:32px;opacity:.85;color:'+(sel?'#ffd77a':'#9fb4d8')+';">'+s.id+'</span>'+
+      inp(s.id,'x',c.x)+inp(s.id,'y',c.y)+inp(s.id,'z',c.z)+
+      '<span style="width:22px;text-align:center;opacity:.6;">T'+s.tier+'</span>'+
+      '<button data-del="'+s.id+'" title="Delete" style="background:#5a2130;color:#ffd0d0;border:1px solid #8c3a4a;border-radius:3px;font:inherit;font-size:11px;line-height:1;padding:2px 6px;cursor:pointer;">&times;</button>'+
+    '</div>';
+  }
+  el.innerHTML=rows||'<div style="padding:9px;opacity:.6;">No systems — use + Add.</div>';
+  let t=el.parentNode&&el.parentNode.querySelector('.lab'); if(t) t.textContent='Systems · '+galaxy.length;
+}
+function highlightSystemsRow(){
+  let el=document.getElementById('sys-table'); if(!el) return;
+  for(const row of el.querySelectorAll('[data-row]')){ let sel=(row.dataset.row===editSelId); row.style.background=sel?'#1c3a66':''; let idc=row.querySelector('[data-idcell]'); if(idc) idc.style.color=sel?'#ffd77a':'#9fb4d8'; }
+}
+function setSysAxis(sid, axis, val){
+  let s=sysById(sid); if(!s) return; let v=parseFloat(val);
+  if(isFinite(v)){ setSysPos(s, axis==='x'?v:null, axis==='y'?v:null, axis==='z'?v:null); markAuthored(); lnNeedsBuild=true; }
+  let c=FIXPT.posTo(s.position), i=document.querySelector('#sys-table [data-sid="'+sid+'"][data-axis="'+axis+'"]'); if(i) i.value=c[axis];   // reflect the stored (0.01-snapped) value
+}
 function showPage(){
   buildNav();
   let body=document.getElementById('pagebody'); body.innerHTML=''; controls={}; presetSel=null;
@@ -1974,7 +2013,8 @@ function showPage(){
   buildControls(page.schema, page.target(), body, page.onChange);
   if(page.id==='gen'){
     let rb=document.createElement('button'); rb.className='act-btn'; rb.textContent='Regenerate (new seed)';
-    rb.onclick=reroll; body.appendChild(rb);
+    rb.onclick=()=>{ reroll(); renderSystemsTable(); }; body.appendChild(rb);
+    buildSystemsTable(body);
   }
   let hint=document.createElement('div'); hint.className='hint';
   hint.textContent = (page.id==='gen')
