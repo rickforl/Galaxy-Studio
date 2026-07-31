@@ -51,6 +51,7 @@
   <span id="build-pill">&mdash;</span>
   <button id="mode-btn">&#9654; VIEW GALAXY</button>
   <button id="edit-btn" title="Toggle galaxy Edit mode — click a star to select it (drag empty space still pans, wheel zooms)">&#9998; Edit</button>
+  <button id="schem-btn" title="Toggle the dev SCHEMATIC board view — systems on cells + single-line lanes coloured by traffic type">&#9671; Schematic</button>
   <button id="fs-btn" title="Fullscreen — Esc exits · i toggles the info readout">&#9974; Fullscreen</button>
   <select id="preset-select" title="Load a galaxy preset"
     style="margin-left:auto;background:#16233b;color:#cdd9ef;border:1px solid #3a5a8c;font:11px 'Consolas',monospace;padding:3px 8px;cursor:pointer;"><option value="">Presets &#9662;</option></select>
@@ -75,8 +76,8 @@
 // ===================================================================
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
-const BUILD_DATE = '20260727';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '07';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260727.07: FIX Y-up grid regression — GRID.VIS() returned reversed y-range (s2w flips screen->world y under Y-up) so square horizontal lines + hex rows never drew (loops iterate y0..y1); VIS now normalizes min/max]
+const BUILD_DATE = '20260731';     // build day — reset SEQ to '01' on a new day
+const BUILD_SEQ  = '01';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260731.01: Gen-tab board work — spectral distribution presets (equal/realistic/game); board model (N×N cells, cell=100 clicks, x10 magnitude ladder, coarse=round(click/100), square extent, minDist>=1 cell, radius derived); Shape toggle (square board / inscribed disc); dev SCHEMATIC board view (cells + spectral dots-on-cells + single-line lanes by traffic type + framed board)]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -107,8 +108,8 @@ let CFG = {
     // BAKE INCLUDES — which layers go into the baked galaxy sprite (unchecked = drawn live per star)
     bake_core: true, bake_glow: true, bake_streamers: false, bake_bloom: false, bake_rim: true, bake_prom: true, bake_embers: true
   },
-  gen: { starCount: 60, radius: 1200, minDist: 130, useGalaxy01: true, starSize: 12, seed: 1234, bakedRender: true,
-         wM: 1, wK: 1, wG: 1, wF: 1, wB: 1, wO: 1, jitter: 15 },
+  gen: { starCount: 60, boardN: 40, boardShape: 'square', radius: 1200, minDist: 130, useGalaxy01: true, starSize: 12, seed: 1234, bakedRender: true,
+         wM: 1, wK: 1, wG: 1, wF: 1, wB: 1, wO: 1, jitter: 15, specDist: 'equal' },
   backdrop: {
     cover: 1.5, bakeRes: 1024, bdFill: true, bdFillMargin: 1.15,                // cover = world square size; bdFill scales the fill layers to cover the viewport (no dark edges) with margin headroom for pan
     // BASE FILL
@@ -234,6 +235,7 @@ function setup(){
   window.addEventListener('beforeunload', ()=>autoSave(true));                 // persist on reload/close
   document.getElementById('mode-btn').onclick   = toggleMode;
   document.getElementById('edit-btn').onclick   = toggleEdit;                     // Phase 3a: galaxy edit mode
+  document.getElementById('schem-btn').onclick  = toggleSchematic;               // dev schematic board view
   document.getElementById('export-btn').onclick = exportCFG;
   document.getElementById('import-btn').onclick = () => document.getElementById('import-file').click();
   { let ps=document.getElementById('preset-select'); if(ps) ps.onchange = e=>{ if(e.target.value) applyGalaxyPreset(e.target.value); }; buildPresetMenu(); }   // top-bar galaxy presets (dropdown shows the picked tier)
@@ -252,13 +254,14 @@ function setup(){
 function windowResized(){ resizeCanvas(windowWidth, windowHeight); invalidateStars(); }
 
 let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
+let schematicMode = false;   // dev schematic board view — swaps drawGalaxyView -> drawSchematic in galaxy view
 let editMode=false, editSelId=null, editDrag=null, galaxyAuthored=false, editAdd=false, editSnap=false, editSnapTo='nearest';   // Phase 3a/3b/3c: authoring toggle + selected id + drag-grab + divergence flag + add-mode + grid-snap + snap target ('center'|'line'|'nearest')
 let fullscreen = false, infoOverlay = true;   // fullscreen galaxy (Esc to exit); info overlay = subtle build+fps bottom-left (toggle with i)
 let lastInteract = -99999;  // ms of the last pan/zoom — used to defer the expensive nebula re-render while interacting
 function draw(){
   stepNebula(CFG.backdrop);                                                    // nebula: hold, then crossfade to the next stepped frame
   if(CFG.traffic.on){ for(const L of CFG.traffic.layers) if(L.on) L.time=(L.time||0)+(L.speed||1)*CFG.traffic.speed*0.01; }   // advance each traffic layer's clock
-  if (viewMode === 'galaxy') drawGalaxyView();
+  if (viewMode === 'galaxy') { if(schematicMode) drawSchematic(); else drawGalaxyView(); }
   else if (activePage === 'backdrop') drawBackdropPreview();   // isolated backdrop compilation (no sun/stars)
   else if (activePage === 'stars') drawStarsPreview();         // isolated starfield compilation
   else if (activePage === 'lanes') drawLanesPreview();         // isolated lane network (nodes + beams, fit)
@@ -1069,6 +1072,55 @@ function drawGridPreview(){
   blendMode(BLEND); noStroke(); fill(120,140,175); textSize(11); textAlign(CENTER,BOTTOM);
   text('grid preview · '+CFG.grid.type+' · boundary = galaxy radius '+CFG.gen.radius+(CFG.grid.on?'':' · (off in galaxy view)')+' · overlays the galaxy in VIEW GALAXY', px, height-16);
 }
+// ---------- Dev SCHEMATIC board view (simplest form: cells + dots + single-line lanes by traffic type) ----------
+const SCHEM_LANE_COL = { off:[80,220,255], uno:[255,90,90], trans:[100,235,130], smuggler:[235,90,235] };   // Official cyan / Unofficial red / Transport green / Smuggler magenta
+function schemProj(wx,wy){ return DATUM.w2s(wx,wy, cam.x,cam.y,cam.zoom, (PANELW+width)/2, height/2); }
+function schemCell(v){ return Math.round(v/CELL_CLICKS)*CELL_CLICKS; }   // snap a click coord to its board-cell node (coarse magnitude)
+function drawSchematic(){
+  background(8,10,16);
+  if(lnNeedsBuild) lnBuild();
+  let n=Math.max(1,CFG.gen.boardN|0), ext=n/2*CELL_CLICKS;
+  push();                                                     // board grid (cell = 100 clicks; major every 5)
+  for(let i=Math.ceil(-n/2); i<=n/2; i++){ let major=(((i%5)+5)%5===0);
+    stroke(major?72:38, major?98:52, major?138:78, major?175:100); strokeWeight(1);
+    let a=schemProj(i*CELL_CLICKS,-ext), b=schemProj(i*CELL_CLICKS,ext); line(a.x,a.y,b.x,b.y);
+    let c=schemProj(-ext,i*CELL_CLICKS), d=schemProj(ext,i*CELL_CLICKS); line(c.x,c.y,d.x,d.y);
+  }
+  noFill();
+  let fr=ext+2*CELL_CLICKS;                                   // frame ~2 cells outside the board
+  stroke(120,175,235,235); strokeWeight(2.5);                // brighter-blue frame
+  let fp=[schemProj(-fr,fr),schemProj(fr,fr),schemProj(fr,-fr),schemProj(-fr,-fr)];
+  beginShape(); for(const q of fp) vertex(q.x,q.y); endShape(CLOSE);
+  stroke(72,98,138,190); strokeWeight(1.5);                  // board boundary = major grid-line colour
+  let bp=[schemProj(-ext,ext),schemProj(ext,ext),schemProj(ext,-ext),schemProj(-ext,-ext)];
+  beginShape(); for(const q of bp) vertex(q.x,q.y); endShape(CLOSE);
+  let o=schemProj(0,0); stroke(150,180,220,140); strokeWeight(1); line(o.x-6,o.y,o.x+6,o.y); line(o.x,o.y-6,o.x,o.y+6);   // origin cross
+  pop();
+  push(); strokeWeight(1.5);                                  // lanes: single lines by traffic type (endpoints snapped to cells)
+  for(const L of laneList){ let A=sysById(L.aId), B=sysById(L.bId); if(!A||!B) continue;
+    let col=SCHEM_LANE_COL[L.kind]||[150,150,150];
+    let a=schemProj(schemCell(A.x),schemCell(A.y)), b=schemProj(schemCell(B.x),schemCell(B.y));
+    stroke(col[0],col[1],col[2],170); line(a.x,a.y,b.x,b.y);
+  }
+  let sm=CFG.traffic.layers.find(L=>L.kind==='smuggler');
+  if(sm && sm.on){ let col=SCHEM_LANE_COL.smuggler; stroke(col[0],col[1],col[2],155);
+    for(const pr of trSmugglerPairs(sm)){ let A=sysById(pr[0]), B=sysById(pr[1]); if(!A||!B) continue;
+      let a=schemProj(schemCell(A.x),schemCell(A.y)), b=schemProj(schemCell(B.x),schemCell(B.y)); line(a.x,a.y,b.x,b.y); }
+  }
+  pop();
+  push();                                                     // system dots, snapped to cells, spectral-coloured
+  for(const s of galaxy){ let q=schemProj(schemCell(s.x),schemCell(s.y)), c=s.color;
+    stroke(6,8,14); strokeWeight(1.5); fill(c[0],c[1],c[2]); circle(q.x,q.y,7);
+  }
+  pop();
+  if(!fullscreen){ blendMode(BLEND); noStroke(); textAlign(LEFT,TOP); fill(130,150,185); textSize(11);
+    text('SCHEMATIC · '+galaxy.length+' systems · '+n+'×'+n+' board · '+laneList.length+' lanes · off cyan/uno red/trans green/smug magenta   [dev]', PANELW+12, 40); }
+}
+function toggleSchematic(){
+  schematicMode=!schematicMode;
+  if(schematicMode){ if(viewMode!=='galaxy'){ viewMode='galaxy'; updateModeBtn(); } fitBoardView(); }
+  let b=document.getElementById('schem-btn'); if(b){ b.style.background=schematicMode?'#2a6cff':''; b.style.color=schematicMode?'#fff':''; }
+}
 function drawGalaxyView(){
   background(4,5,9);
   drawBackdrop(true);                                       // parallax backdrop (deepest: far nebula/image)
@@ -1116,23 +1168,23 @@ function randomSpectral(g){
   let j=g.jitter;
   return [constrain(base[0]+random(-j,j),0,255), constrain(base[1]+random(-j,j),0,255), constrain(base[2]+random(-j,j),0,255)];
 }
+const CELL_CLICKS = 100;   // 1 board cell = 100 clicks (the "c=100" fine magnitude). Board = boardN cells -> square extent = boardN*50 clicks each side. x10 magnitude ladder; coarse-board cell of a system = round(click/100).
 function generateGalaxy(g){
   randomSeed(g.seed|0);
   galaxy=[];
-  let N=g.starCount|0, R=g.radius, minD=g.minDist;
+  let cell=CELL_CLICKS, R=Math.max(1,(g.boardN|0))/2*cell; g.radius=R;   // board -> square half-extent (clicks); derive the legacy radius (grid boundary / culling / backdrop read this)
+  let N=g.starCount|0, minD=Math.max(g.minDist, cell);   // minDist floored at 1 cell so no two systems round into the same coarse-board cell
   let nT3=Math.round(N*0.03), nT2=Math.round(N*0.13), nT1=N-nT2-nT3;
   let tiers=[]; for(let i=0;i<nT1;i++)tiers.push(1); for(let i=0;i<nT2;i++)tiers.push(2); for(let i=0;i<nT3;i++)tiers.push(3);
   for(let i=tiers.length-1;i>0;i--){ let jx=Math.floor(random()*(i+1)); let tmp=tiers[i]; tiers[i]=tiers[jx]; tiers[jx]=tmp; }
   let placed=0, attempts=0, capA=N*300;
   while(placed<N && attempts<capA){
     attempts++;
-    let x,y;
-    if(g.useGalaxy01){                     // galaxy_01 rules: continuous, min-distance reject
-      x=random(-R,R); y=random(-R,R); if(x*x+y*y>R*R) continue;
+    let x=random(-R,R), y=random(-R,R);    // fill the board (origin-centered) — the board IS the generation extent
+    if(g.boardShape==='disc' && x*x+y*y>R*R) continue;   // inscribed-disc option: reject outside the board's inscribed circle (square = keep the corners)
+    if(g.useGalaxy01){                     // min-distance reject (>= 1 cell)
       let ok=true; for(const s of galaxy){ let dx=s.x-x, dy=s.y-y; if(dx*dx+dy*dy<minD*minD){ ok=false; break; } }
       if(!ok) continue;
-    } else {                               // IE (placeholder): uniform across the disc, no min-dist
-      let a=random(TWO_PI), rr=R*Math.sqrt(random()); x=cos(a)*rr; y=sin(a)*rr;
     }
     const _pos = FIXPT.posFrom({x,y,z:0}), _wc = FIXPT.posTo(_pos);   // canonical (0.01-click) is the source of truth; working x/y = its exact Number shadow (Phase 2d)
     galaxy.push({ id:'S'+placed, position: _pos, x: _wc.x, y: _wc.y, tier: tiers[placed]||1, color: randomSpectral(g), seed: placed*997+1 });   // exact canonical position + snapped working x/y; refs by id (2b)
@@ -1347,6 +1399,7 @@ function drawBackdrop(parallax){                                              //
 }
 function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); invalidateLanes(); invalidateTraffic(); }   // radius change -> extent change -> re-bake + relink
 function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); regenerate(); }
+function fitBoardView(){ let ext=Math.max(1,(CFG.gen.boardN|0))*CELL_CLICKS, playW=width-PANELW; cam.x=0; cam.y=0; cam.zoom=Math.min(playW,height)/(ext*1.12); }   // center origin + zoom to frame the whole board
 let gPressPt=null;   // grid-waypoint click-vs-drag tracking
 function mousePressed(){ gPressPt={x:mouseX,y:mouseY}; editDrag=null;
   if(editMode && viewMode==='galaxy' && mouseX>PANELW){ if(!editAdd){ let hit=pickStar(mouseX,mouseY); if(hit){ let w=screenToWorld(mouseX,mouseY); editDrag={id:hit.id,moved:false,ox:hit.x-w.x,oy:hit.y-w.y}; editSelId=hit.id; updateEditInspector(); } } return; }   // 3b/3c: grab a star (press=select; drag=move; empty=pan). Add-mode: no grab -> click places on release, drag pans
@@ -1839,11 +1892,21 @@ const SUN_SCHEMA = [
     ['bake_bloom','Bloom','bool'],['bake_rim','Rim','bool'],['bake_prom','Prominence','bool'],['bake_embers','Embers','bool']]]
 ];
 const GEN_SCHEMA = [
-  ['Generation', [['starCount','Stars','range',10,300,1],['radius','Radius','range',400,2500,50],
+  ['Generation', [['starCount','Stars','range',10,300,1],['boardN','Board size (N×N cells)','range',8,80,2],['boardShape','Shape','select',[['square','Square board'],['disc','Inscribed disc']]],
     ['minDist','Min spacing','range',40,300,5],['useGalaxy01','galaxy_01 min-dist','bool'],['starSize','Star size','range',4,30,1],['bakedRender','Baked render (fast)','bool']]],
-  ['Spectral mix', [['wM','Red (M)','range',0,5,1],['wK','Orange (K)','range',0,5,1],['wG','Yellow (G)','range',0,5,1],
+  ['Spectral mix', [['specDist','Distribution','select',[['equal','Equal (flat)'],['realistic','Realistic'],['game','Game-realistic']]],
+    ['wM','Red (M)','range',0,5,1],['wK','Orange (K)','range',0,5,1],['wG','Yellow (G)','range',0,5,1],
     ['wF','White (F)','range',0,5,1],['wB','Blue (B)','range',0,5,1],['wO','Purple (O)','range',0,5,1],['jitter','Color jitter','range',0,40,1]]]
 ];
+const DIST_PRESETS = {                              // spectral-mix generation chances (relative weights; jitter unchanged). Sliders are coarse (0-5) so presets store finer values in CFG that generation uses even when the slider thumb rounds.
+  equal:     [1, 1, 1, 1, 1, 1],                    // flat — every type equally likely (the current default)
+  realistic: [5, 0.8, 0.5, 0.2, 0.05, 0.005],       // real MK frequencies: ~77% M, 12% K, 7.7% G, 3% F, tiny B/O
+  game:      [5, 3.5, 2.5, 1.7, 1, 0.4]             // cool-leaning but varied/playable: ~35/25/18/12/7/3 %
+};
+function applySpecDist(name){                       // set the 6 spectral weights from a preset + reflect them in the sliders
+  let w=DIST_PRESETS[name]||DIST_PRESETS.equal, keys=['wM','wK','wG','wF','wB','wO'];
+  keys.forEach((k,i)=>{ CFG.gen[k]=w[i]; let c=controls[k]; if(c){ c.input.value=w[i]; if(c.val) c.val.textContent=(''+w[i]); } });
+}
 const BD_IMGS = ['galaxy_backgrounds/bright_01.png','galaxy_backgrounds/cigar_01.png','galaxy_backgrounds/evileye_01.png',
   'galaxy_backgrounds/gal_neb_10.jpg','galaxy_backgrounds/gal_neb_17.jpg','galaxy_backgrounds/gal_neb_18.jpg',
   'galaxy_backgrounds/gal_neb_19.jpg','galaxy_backgrounds/gal_neb_20.jpg','galaxy_backgrounds/gal_neb_21.jpg',
@@ -1941,7 +2004,7 @@ const GRID_PRESETS = {
 let gridPreset='';
 const PAGES = [
   { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true, onChange: invalidateSunSprites },
-  { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: ()=>{ regenerate(); renderSystemsTable(); } },
+  { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: (key)=>{ if(key==='specDist') applySpecDist(CFG.gen.specDist); regenerate(); if(key==='boardN') fitBoardView(); renderSystemsTable(); } },
   { id:'backdrop', label:'Backdrop',   schema: BACKDROP_SCHEMA, target: ()=>CFG.backdrop, onChange: invalidateBackdrop },
   { id:'stars',    label:'Stars',      schema: [], target: ()=>CFG.stars, custom:'stars' },
   { id:'lanes',    label:'Lanes',      schema: LANES_SCHEMA, target: ()=>CFG.lanes, lanePresets:true, onChange: onLaneChange },
