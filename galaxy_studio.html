@@ -89,14 +89,22 @@
 <div id="panel-scrim"></div>
 <script>
 // ===================================================================
-// SUN EXHIBIT 03 — the full rich build (every effect) + a live options menu.
-// One engine; each archived version is this file with a different ACTIVE_PRESET.
+// GALAXY STUDIO — v2 (2026-08-01). Single-file, buildless WORLD space/time
+// dimension consumer. Authors a persistent galaxy (exact-BigInt click coords,
+// Y-up/ENU; 1 world-unit = 1 click) with per-tab styling — sun · gen · backdrop ·
+// stars · lanes · traffic · grid — map authoring (drag / add / delete / snap +
+// raw x/y/z table), and a robust save/load layer: config round-trips 1:1 across
+// every tab, hand-authored galaxies persist across reload (own localStorage key),
+// and a new default auto-propagates to returning visitors without ever clobbering
+// a customized or hand-authored galaxy. Runs on desktop + mobile (drawer UI,
+// touch pan/zoom/fullscreen). Sun engine origin: "Sun Exhibit 03" — one engine,
+// ACTIVE_PRESET selects the archived sun look.
 // ===================================================================
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260801';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '08';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260801.08: new-default propagation -- (a) old defaults now HOUSED as versioned Presets (added 'Default · 0731 square'); (b) a returning session that STRUCTURALLY equals an old default (not customized, not hand-authored) auto-upgrades to the current default on load, with a small dismissible note pointing to Presets; (c) new 'Return to default' top-bar button (confirms first). Customized/authored galaxies are never touched (structural match + galaxyAuthored guard)]
-const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
+const BUILD_SEQ  = '01';           // per-day build sequencer -- bump each build (01, 02, 03, ...); resets to '01' on a new day OR a new major version   [v2_20260801.01 — MILESTONE. v1 (the WORLD-consumer architecture: Y-up units, exact-BigInt dataset, map authoring) is now stable; v2 marks production-readiness. Since v1_20260801.08: mobile accessibility + control (slide-over drawer, horizontally-scrollable topbar, touch pan/zoom, app-side fullscreen w/ double-tap exit, recenter, Y-up-correct panning + parallax), adaptive fit + overscan framing, and a robust save/load layer — config round-trips 1:1 across ALL tabs (empirically verified), hand-authored galaxies persist across reload (separate DATASET_KEY), and new defaults auto-propagate to returning visitors via structural-match (never clobbering a customized or hand-authored galaxy), with old defaults housed as versioned Presets + a Return-to-default button]
+const BUILD_ID   = 'v2_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v2 = stability / production milestone: mobile accessibility + robust save/load + safe default propagation; v1 was the WORLD-consumer architecture. buildNum() ignores the v#_ prefix, so v2.01 < v1.08 numerically is fine — only the >= FLIP_BUILD migration gate reads it)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
 // each effect draws live from OPTS so every slider updates instantly (single sun, so no baking needed

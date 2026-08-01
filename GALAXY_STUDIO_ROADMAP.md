@@ -3,6 +3,19 @@
 > **Home:** `EBB_TBC_V5/galaxy_sandbox/` · started 2026-07-17
 > **North star:** one app where **every part of the galaxy is a tunable option**, with a **"View Galaxy"** mode that renders the result live — a galaxy configurator/sandbox grown out of the sun options menu.
 
+## Status — **v2_20260801.01** *(stability / production milestone, 2026-08-01)*
+
+**Live:** https://rickforl.github.io/Galaxy-Studio/galaxy_studio.html (single-file, buildless, GitHub Pages).
+
+**v1 — WORLD-consumer architecture (complete & stable).** Phases 0–3 shipped: namespaced `CFG` + multi-page options + OPTIONS↔VIEW toggle + whole-config presets/export; parameterized generator + live star view; all subsystems (backdrop · stars · lanes · traffic · grid); WORLD adoption — Y-up/ENU, ported `UNITS`/`FIXPT`/`COORD`, exact-BigInt canonical positions, `worldSpec` drift anchor; the **board/×10-magnitude model** (N×N board = generation extent, 1 cell = 100 clicks); and **map authoring** (drag / add / delete / grid-hex-polar snap + raw x/y/z table).
+
+**v2 — production-readiness (this milestone).** Since v1_20260801.08:
+- **Mobile accessibility + control** — slide-over settings drawer + horizontally-scrollable topbar (`@media pointer:coarse`), touch pan/zoom, app-side fullscreen with double-tap exit, recenter button; Y-up-correct panning *and* parallax on touch.
+- **Framing** — adaptive fit + slight overscan on fresh load (galaxy fills the screen, edges just outside).
+- **Robust save/load** — config round-trips **1:1 across every tab** (empirically verified); **hand-authored galaxies persist** across reload via a separate `DATASET_KEY` (config/export contract stays systems-free); **new defaults auto-propagate** to returning visitors by *structural match* (never clobbering a customized or hand-authored galaxy), with old defaults housed as **versioned Presets** + a **Return-to-default** button.
+
+*Roadmap items below are the original phased plan (design reference); the phases above are done.*
+
 ## Foundation direction — WORLD consumer *(north-star; locked 2026-07-20, NOT built)*
 
 **A standing compatibility constraint on all future work, not a task.** galaxy_studio is heading toward becoming a **consumer of the WORLD space (and later time) dimension** as its position / scale / clock foundation (WORLD = a portable, framework-free fixed-point world-model at `EBB_TBC_V4/BR_BRAINSTORMING/20260620_WORLD/` — read `WORLD_PRINCIPLES.txt` + `modules/space/{constants,fixedpoint,index}.v01.ts` + `modules/time/{constants,clock,stack,types}.v01.ts`). **The rule: build *toward* it — don't build anything that would have to be ripped out to become a consumer.** Nothing is adopted yet.
