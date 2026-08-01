@@ -42,11 +42,25 @@
   #panel .hint{color:#5f6f8c;margin-top:10px;font-size:10px;line-height:1.4;}
   #panel .act-btn{width:100%;background:#16233b;color:#cdd9ef;border:1px solid #3a5a8c;font:11px 'Consolas',monospace;padding:5px;cursor:pointer;margin-top:10px;}
   #panel .act-btn:hover{background:#1e2f4d;}
+  #drawer-btn{display:none;position:sticky;left:0;z-index:2;align-items:center;background:#1e2f4d;color:#dfe8f8;border:1px solid #3a5a8c;font:13px 'Consolas',monospace;line-height:1;padding:3px 10px;cursor:pointer;}
+  #panel-scrim{display:none;position:fixed;top:31px;left:0;right:0;bottom:0;background:rgba(4,6,12,0.5);z-index:49;}
+  @media (pointer: coarse){
+    #topbar{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;}
+    #topbar>*{flex-shrink:0;}
+    #preset-select{margin-left:8px !important;}
+    #fps-pill{margin-left:8px !important;}
+    #drawer-btn{display:inline-flex;}
+    #panel{width:min(86vw,340px);transform:translateX(-100%);transition:transform .24s ease;z-index:50;box-shadow:3px 0 22px rgba(0,0,0,0.65);}
+    #panel.drawer-open{transform:translateX(0);}
+    #panel-scrim.on{display:block;}
+    #gen-preview{left:0 !important;}
+  }
   input[type=number]{-moz-appearance:textfield;}
   input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 </style>
 </head><body>
 <div id="topbar">
+  <button id="drawer-btn" title="Menu — settings panel">&#9776;</button>
   <span class="ttl">GALAXY STUDIO</span>
   <span id="build-pill">&mdash;</span>
   <button id="mode-btn">&#9654; VIEW GALAXY</button>
@@ -70,6 +84,7 @@
 <div id="gen-preview" style="display:none;flex-direction:column;position:fixed;left:250px;top:31px;right:0;bottom:0;z-index:15;background:#080b12;color:#cdd9ef;font:11px 'Consolas',monospace;"></div>
 <button id="recenter-btn" title="Recenter on origin (0,0) — fit the board" style="display:none;position:fixed;bottom:16px;right:16px;z-index:45;width:44px;height:44px;border-radius:50%;align-items:center;justify-content:center;background:rgba(22,35,59,0.92);color:#cdd9ef;border:1px solid #3a5a8c;font-size:20px;line-height:1;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,0.55);">&#9678;</button>
 <div id="panel"><div id="nav"></div><div id="pagebody"></div></div>
+<div id="panel-scrim"></div>
 <script>
 // ===================================================================
 // SUN EXHIBIT 03 — the full rich build (every effect) + a live options menu.
@@ -78,7 +93,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260801';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '02';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260801.02: mobile fixes — touchStarted now ignores taps on DOM controls (was preventDefault-ing them in galaxy view, so the recenter + fullscreen buttons didn't fire on mobile); fullscreen on touch devices is app-side only (skip the browser Fullscreen API -> no native X, clean re-entry)]
+const BUILD_SEQ  = '03';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260801.03: mobile responsive layout (@media pointer:coarse) — sidebar becomes a slide-over DRAWER (hamburger + scrim; canvas full-width w/ PANELW=0, opens on the galaxy); topbar scrolls horizontally so all buttons are reachable. Desktop untouched]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -233,11 +248,14 @@ function setup(){
   if(new URLSearchParams(location.search).get('reset')!==null){ try{ localStorage.removeItem(CFG_KEY); }catch(e){} applyGalaxyPreset('Default'); }   // ?reset -> discard saved session, load the authored default
   else if(loadState()) afterConfigChange();                                    // restore last session from localStorage
   else applyGalaxyPreset('Default');                                           // fresh visitor (no saved config) -> the authored default galaxy
+  if(isTouchDevice()){ PANELW=0; viewMode='galaxy'; }                          // mobile: canvas full-width (panel becomes a slide-over drawer); open on the galaxy
   window.addEventListener('beforeunload', ()=>autoSave(true));                 // persist on reload/close
   document.getElementById('mode-btn').onclick   = toggleMode;
   document.getElementById('edit-btn').onclick   = toggleEdit;                     // Phase 3a: galaxy edit mode
   document.getElementById('schem-btn').onclick  = toggleSchematic;               // dev schematic board view
   document.getElementById('recenter-btn').onclick = ()=>fitBoardView();          // recenter on origin + fit the board
+  document.getElementById('drawer-btn').onclick = ()=>toggleDrawer();             // mobile: slide the settings panel in/out
+  document.getElementById('panel-scrim').onclick = ()=>toggleDrawer(false);
   document.getElementById('export-btn').onclick = exportCFG;
   document.getElementById('import-btn').onclick = () => document.getElementById('import-file').click();
   { let ps=document.getElementById('preset-select'); if(ps) ps.onchange = e=>{ if(e.target.value) applyGalaxyPreset(e.target.value); }; buildPresetMenu(); }   // top-bar galaxy presets (dropdown shows the picked tier)
@@ -253,6 +271,7 @@ function setup(){
   // initial galaxy is already built: every branch above (reset / loadState / fresh-default) applies a snapshot, and afterConfigChange regenerates the systems
   updateModeBtn();
 }
+function toggleDrawer(open){ let p=document.getElementById('panel'), s=document.getElementById('panel-scrim'); let show=(open===undefined)?!p.classList.contains('drawer-open'):!!open; if(p) p.classList.toggle('drawer-open',show); if(s) s.classList.toggle('on',show); }   // mobile slide-over settings drawer
 function windowResized(){ resizeCanvas(windowWidth, windowHeight); invalidateStars(); }
 
 let viewMode = 'options';   // 'options' (single-sun tuning) | 'galaxy' (full view)
@@ -1577,7 +1596,7 @@ function updateEditInspector(){
 function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); updateGenPreview(); }
 function updateModeBtn(){ let b=document.getElementById('mode-btn'); if(b) b.innerHTML = (viewMode==='options') ? '&#9654; VIEW GALAXY' : '&#9664; OPTIONS'; let rc=document.getElementById('recenter-btn'); if(rc) rc.style.display=(viewMode==='galaxy')?'flex':'none'; }   // recenter button shows in galaxy/fullscreen view only
 function applyFullscreen(on){                                                 // app-side: hide the UI + let the galaxy fill the window
-  fullscreen = on; PANELW = on ? 0 : 272;
+  fullscreen = on; PANELW = (on || isTouchDevice()) ? 0 : 272;   // mobile keeps PANELW=0 (drawer overlays; canvas stays full-width)
   let p=document.getElementById('panel'), t=document.getElementById('topbar');
   if(p) p.style.display = on?'none':''; if(t) t.style.display = on?'none':'';
   if(on){ viewMode='galaxy'; updateModeBtn(); }
