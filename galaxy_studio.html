@@ -93,7 +93,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260801';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '03';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260801.03: mobile responsive layout (@media pointer:coarse) — sidebar becomes a slide-over DRAWER (hamburger + scrim; canvas full-width w/ PANELW=0, opens on the galaxy); topbar scrolls horizontally so all buttons are reachable. Desktop untouched]
+const BUILD_SEQ  = '04';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260801.04: default zoom now AUTO-FITS the board to the screen on a fresh/?reset load (fitBoardView) instead of the config's baked view.camZoom (which was fitted for one screen -> looked 'far' on bigger screens / too close on mobile). Restored sessions keep their saved pan/zoom]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -245,10 +245,12 @@ function setup(){
   bakePlasma(); bakeFilament();
   showPage();                   // build nav + the active page's controls
   applyPreset(ACTIVE_PRESET);   // apply starting sun preset + sync controls
+  if(isTouchDevice()){ PANELW=0; viewMode='galaxy'; }                          // mobile: canvas full-width (drawer overlay); open on galaxy — set BEFORE the fit so it uses PANELW=0
+  let _restored=false;
   if(new URLSearchParams(location.search).get('reset')!==null){ try{ localStorage.removeItem(CFG_KEY); }catch(e){} applyGalaxyPreset('Default'); }   // ?reset -> discard saved session, load the authored default
-  else if(loadState()) afterConfigChange();                                    // restore last session from localStorage
+  else if(loadState()){ afterConfigChange(); _restored=true; }                 // restore last session from localStorage (keep its saved pan/zoom)
   else applyGalaxyPreset('Default');                                           // fresh visitor (no saved config) -> the authored default galaxy
-  if(isTouchDevice()){ PANELW=0; viewMode='galaxy'; }                          // mobile: canvas full-width (panel becomes a slide-over drawer); open on the galaxy
+  if(!_restored) fitBoardView();                                               // fresh/default -> frame the board to THIS screen (adaptive; the baked view.camZoom was fitted for one screen, so it looks 'far' on bigger screens / too close on mobile)
   window.addEventListener('beforeunload', ()=>autoSave(true));                 // persist on reload/close
   document.getElementById('mode-btn').onclick   = toggleMode;
   document.getElementById('edit-btn').onclick   = toggleEdit;                     // Phase 3a: galaxy edit mode
