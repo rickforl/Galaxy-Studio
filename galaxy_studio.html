@@ -78,7 +78,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260731';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '03';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260731.03: mobile/UX fixes — FIX Y-up pan regression (cam.y was += screen-dy; now -= so the map follows the cursor/finger, mouse+touch); double-tap exits fullscreen (no Esc on mobile); floating recenter button (◎, galaxy/fullscreen only) -> fitBoardView]
+const BUILD_SEQ  = '04';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260731.04: FIX parallax Y direction — backdrop (drawBackdrop) + starfield (drawStars) translated by +cam.y (never flipped for Y-up), so after the .03 pan fix they panned opposite the systems; now -cam.y so image/nebula/star layers pan WITH the galaxy]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -345,7 +345,7 @@ function drawStars(camX, camY, camZoom){                    // per-layer paralla
   let cx=(camX!==undefined)?camX:cam.x, cy=(camY!==undefined)?camY:cam.y, cz=(camZoom!==undefined)?camZoom:cam.zoom;
   for(let i=0;i<CFG.stars.layers.length;i++){ let L=CFG.stars.layers[i]; if(!L.on) continue;
     let p=L.parallax, lz=Math.pow(cz, p);                                     // zoom^parallax: p=0 -> no zoom, p=1 -> full galaxy zoom
-    push(); translate(pcx, pcy); translate(cx*lz*p, cy*lz*p); scale(lz);
+    push(); translate(pcx, pcy); translate(cx*lz*p, -cy*lz*p); scale(lz);   // Y-up: -cy so the starfield parallax pans with the systems
     if(L.bake){ if(sfBuf[i]){ imageMode(CENTER); image(sfBuf[i], 0,0, 2*F.fw, 2*F.fh); } }
     else sfDrawLayer(window, sfData[i], sfOpt(L), t);
     pop();
@@ -1383,7 +1383,7 @@ function drawBackdrop(parallax){                                              //
     if(parallax && L==='fade') continue;                                     // fade -> aspect-aware viewport vignette after the loop
     let lz=1;
     if(parallax){ let p=(B[L+'Parallax']!==undefined?B[L+'Parallax']:1); lz=Math.pow(cam.zoom,p);
-      push(); translate(pcx,pcy); translate(cam.x*lz*p, cam.y*lz*p); scale(lz); }   // p=1 -> locked to galaxy; lower -> farther
+      push(); translate(pcx,pcy); translate(cam.x*lz*p, -cam.y*lz*p); scale(lz); }   // p=1 -> locked to galaxy; lower -> farther (Y-up: -cam.y so the backdrop parallax pans with the systems)
     if(B['bake_'+L]!==false){                                                 // baked: blit this layer's own buffer (rebuild if dirty/resized)
       let b=bdBuf[L];
       if(bdDirty || !b || b.width!==res || (L==='neb' && nebFading)) b=bakeBdLayer(L, E, res);   // re-bake neb each frame during the crossfade
