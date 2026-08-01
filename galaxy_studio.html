@@ -68,6 +68,7 @@
 <div id="fps-sheet"></div>
 <div id="edit-inspector" style="display:none;position:fixed;top:44px;right:10px;z-index:40;width:184px;background:rgba(12,18,30,0.93);border:1px solid #2a6cff;border-radius:6px;padding:9px 11px;font:11px 'Consolas',monospace;color:#cdd9ef;box-shadow:0 4px 18px rgba(0,0,0,0.5);"></div>
 <div id="gen-preview" style="display:none;flex-direction:column;position:fixed;left:250px;top:31px;right:0;bottom:0;z-index:15;background:#080b12;color:#cdd9ef;font:11px 'Consolas',monospace;"></div>
+<button id="recenter-btn" title="Recenter on origin (0,0) — fit the board" style="display:none;position:fixed;bottom:16px;right:16px;z-index:45;width:44px;height:44px;border-radius:50%;align-items:center;justify-content:center;background:rgba(22,35,59,0.92);color:#cdd9ef;border:1px solid #3a5a8c;font-size:20px;line-height:1;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,0.55);">&#9678;</button>
 <div id="panel"><div id="nav"></div><div id="pagebody"></div></div>
 <script>
 // ===================================================================
@@ -77,7 +78,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260731';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '02';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260731.02: embedded the board-native DEFAULT (0731 export: 40x40 SQUARE board, 45 systems, seed 63687, game-realistic spectral, minDist 250, board-fit camera, worldSpec-stamped) -- replaces the old +-1200 circular default; clears the board redeploy hold]
+const BUILD_SEQ  = '03';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260731.03: mobile/UX fixes — FIX Y-up pan regression (cam.y was += screen-dy; now -= so the map follows the cursor/finger, mouse+touch); double-tap exits fullscreen (no Esc on mobile); floating recenter button (◎, galaxy/fullscreen only) -> fitBoardView]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -236,6 +237,7 @@ function setup(){
   document.getElementById('mode-btn').onclick   = toggleMode;
   document.getElementById('edit-btn').onclick   = toggleEdit;                     // Phase 3a: galaxy edit mode
   document.getElementById('schem-btn').onclick  = toggleSchematic;               // dev schematic board view
+  document.getElementById('recenter-btn').onclick = ()=>fitBoardView();          // recenter on origin + fit the board
   document.getElementById('export-btn').onclick = exportCFG;
   document.getElementById('import-btn').onclick = () => document.getElementById('import-file').click();
   { let ps=document.getElementById('preset-select'); if(ps) ps.onchange = e=>{ if(e.target.value) applyGalaxyPreset(e.target.value); }; buildPresetMenu(); }   // top-bar galaxy presets (dropdown shows the picked tier)
@@ -1417,10 +1419,10 @@ function mouseReleased(){   // edit mode: finish a grab (move committed on drag;
   gPressPt=null; editDrag=null; }
 function mouseDragged(){
   if(editDrag){ moveEditStar(mouseX,mouseY); return; }                                   // 3b: grabbed a star -> move it (not pan)
-  if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y += (mouseY-pmouseY)/cam.zoom; lastInteract=millis(); } }
+  if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y -= (mouseY-pmouseY)/cam.zoom; lastInteract=millis(); } }   // cam.y is Y-up: subtract screen dy so the map follows the cursor (was += pre-Y-up)
 function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); lastInteract=millis(); return false; } }
 // ---------- Touch (mobile): 1-finger pan, 2-finger pinch-zoom, tap = grid waypoint. Mirrors the mouse handlers; returning false = preventDefault (no page scroll/zoom, no synthesized mouse events -> no double-handling) ----------
-let _tPrev=null, _tPinch=0, _tStart=null, _tMoved=false, _tActive=false;
+let _tPrev=null, _tPinch=0, _tStart=null, _tMoved=false, _tActive=false, _lastTap=0;
 function touchStarted(){
   if(!touches.length) return;
   let t0=touches[0];
@@ -1441,12 +1443,17 @@ function touchMoved(){
   } else if(_tPrev){                                         // 1 finger: move a grabbed star, else pan
     let t0=touches[0];
     if(editDrag){ moveEditStar(t0.x,t0.y); _tMoved=true; _tPrev={x:t0.x,y:t0.y}; }               // 3b: grabbed -> move star
-    else { cam.x += (t0.x-_tPrev.x)/cam.zoom; cam.y += (t0.y-_tPrev.y)/cam.zoom; _tPrev={x:t0.x,y:t0.y};
+    else { cam.x += (t0.x-_tPrev.x)/cam.zoom; cam.y -= (t0.y-_tPrev.y)/cam.zoom; _tPrev={x:t0.x,y:t0.y};   // Y-up: subtract screen dy so the map follows the finger
       if(_tStart && Math.hypot(t0.x-_tStart.x, t0.y-_tStart.y)>8) _tMoved=true; }
   }
   lastInteract=millis(); return false;
 }
 function touchEnded(){
+  if(_tActive && _tStart && !_tMoved){                        // a tap (no drag): double-tap while fullscreen exits it (mobile has no Esc key)
+    let now=millis();
+    if(fullscreen && now-_lastTap<320){ _lastTap=0; exitFullscreen(); _tActive=false;_tPrev=null;_tStart=null;_tMoved=false;_tPinch=0; return false; }
+    _lastTap=now;
+  }
   if(editMode && viewMode==='galaxy' && _tActive){
     if(editDrag){ if(editDrag.moved) lnNeedsBuild=true; }                                         // moved a star -> rebuild lane topology (select happened on touchStarted)
     else if(_tStart && !_tMoved && _tStart.x>PANELW){ if(editAdd) addStarAt(_tStart.x,_tStart.y); else { editSelId=null; updateEditInspector(); } }   // add mode: place; else tap empty -> deselect
@@ -1567,7 +1574,7 @@ function updateEditInspector(){
   let db=el.querySelector('[data-act="del"]'); if(db) db.onclick=deleteSelStar;
 }
 function toggleMode(){ viewMode = (viewMode==='options') ? 'galaxy' : 'options'; updateModeBtn(); updateGenPreview(); }
-function updateModeBtn(){ let b=document.getElementById('mode-btn'); if(b) b.innerHTML = (viewMode==='options') ? '&#9654; VIEW GALAXY' : '&#9664; OPTIONS'; }
+function updateModeBtn(){ let b=document.getElementById('mode-btn'); if(b) b.innerHTML = (viewMode==='options') ? '&#9654; VIEW GALAXY' : '&#9664; OPTIONS'; let rc=document.getElementById('recenter-btn'); if(rc) rc.style.display=(viewMode==='galaxy')?'flex':'none'; }   // recenter button shows in galaxy/fullscreen view only
 function applyFullscreen(on){                                                 // app-side: hide the UI + let the galaxy fill the window
   fullscreen = on; PANELW = on ? 0 : 272;
   let p=document.getElementById('panel'), t=document.getElementById('topbar');
