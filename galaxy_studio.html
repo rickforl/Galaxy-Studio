@@ -78,7 +78,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260801';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '01';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260801.01: release build — carries the 0731 mobile/UX fixes (Y-up pan + parallax pan direction, double-tap fullscreen exit, recenter button) to the live deploy]
+const BUILD_SEQ  = '02';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260801.02: mobile fixes — touchStarted now ignores taps on DOM controls (was preventDefault-ing them in galaxy view, so the recenter + fullscreen buttons didn't fire on mobile); fullscreen on touch devices is app-side only (skip the browser Fullscreen API -> no native X, clean re-entry)]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -1423,7 +1423,8 @@ function mouseDragged(){
 function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); lastInteract=millis(); return false; } }
 // ---------- Touch (mobile): 1-finger pan, 2-finger pinch-zoom, tap = grid waypoint. Mirrors the mouse handlers; returning false = preventDefault (no page scroll/zoom, no synthesized mouse events -> no double-handling) ----------
 let _tPrev=null, _tPinch=0, _tStart=null, _tMoved=false, _tActive=false, _lastTap=0;
-function touchStarted(){
+function touchStarted(event){
+  if(event && event.target && event.target.tagName!=='CANVAS'){ _tActive=false; return; }   // tap landed on a DOM control (buttons/panel) -> let it fire its own click; don't preventDefault it away
   if(!touches.length) return;
   let t0=touches[0];
   _tActive = (viewMode==='galaxy' && t0.x>PANELW);          // does this gesture belong to the galaxy canvas? (not the panel / topbar)
@@ -1582,7 +1583,8 @@ function applyFullscreen(on){                                                 //
   if(on){ viewMode='galaxy'; updateModeBtn(); }
   resizeCanvas(windowWidth, windowHeight); invalidateStars();
 }
-function enterFullscreen(){ applyFullscreen(true); let el=document.documentElement; if(el.requestFullscreen){ try{ el.requestFullscreen().catch(()=>{}); }catch(e){} } }
+function isTouchDevice(){ return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches); }
+function enterFullscreen(){ applyFullscreen(true); if(isTouchDevice()) return; let el=document.documentElement; if(el.requestFullscreen){ try{ el.requestFullscreen().catch(()=>{}); }catch(e){} } }   // touch/mobile: app-side fullscreen only (skip the browser Fullscreen API — its native X control + re-entry quirks); desktop still goes true-fullscreen
 function exitFullscreen(){ let inFs=!!document.fullscreenElement; applyFullscreen(false); if(inFs && document.exitFullscreen){ try{ document.exitFullscreen().catch(()=>{}); }catch(e){} } }
 const CFG_KEY='galaxy_studio_cfg';
 let lastSaved='', lastSaveCheck=0;
