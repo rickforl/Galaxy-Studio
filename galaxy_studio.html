@@ -77,8 +77,8 @@
 // ===================================================================
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
-const BUILD_DATE = '20260731';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '04';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260731.04: FIX parallax Y direction — backdrop (drawBackdrop) + starfield (drawStars) translated by +cam.y (never flipped for Y-up), so after the .03 pan fix they panned opposite the systems; now -cam.y so image/nebula/star layers pan WITH the galaxy]
+const BUILD_DATE = '20260801';     // build day — reset SEQ to '01' on a new day
+const BUILD_SEQ  = '01';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260801.01: release build — carries the 0731 mobile/UX fixes (Y-up pan + parallax pan direction, double-tap fullscreen exit, recenter button) to the live deploy]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
