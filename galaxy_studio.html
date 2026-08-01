@@ -93,7 +93,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260801';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '06';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260801.06: (1) baked the CURRENT tuned look as the DEFAULT (Field parallax 0.13 + full star/lane/traffic/grid tuning); (2) verified save<->load is 1:1 across ALL tabs -- every CFG field round-trips (empirical diff = only runtime _ship/_pair caches drop, by design). Known gap: HAND-AUTHORED system positions are not in autosave (seed-regen on reload) -- durable only via dataset export; flagged]
+const BUILD_SEQ  = '07';           // per-day build sequencer -- bump each build (01, 02, 03, ...)   [20260801.07: CLOSED the last save gap -- HAND-AUTHORED galaxies now persist. Any drag/add/delete flips galaxyAuthored, autoSave() writes the exact systems to a SEPARATE localStorage key (DATASET_KEY), and restoreDataset() overlays them on load -> a hand-edited map reloads intact. Kept out of studioSnapshot/exportCFG so the panels-port contract stays systems-free; procedural galaxies clear the key. (Follows .06: baked current look as default + verified all CFG settings are 1:1)]
 const BUILD_ID   = 'v1_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v1 = WORLD-consumer architecture; format matches the exhibit's v1_ pill)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -247,8 +247,8 @@ function setup(){
   applyPreset(ACTIVE_PRESET);   // apply starting sun preset + sync controls
   if(isTouchDevice()){ PANELW=0; viewMode='galaxy'; }                          // mobile: canvas full-width (drawer overlay); open on galaxy — set BEFORE the fit so it uses PANELW=0
   let _restored=false;
-  if(new URLSearchParams(location.search).get('reset')!==null){ try{ localStorage.removeItem(CFG_KEY); }catch(e){} applyGalaxyPreset('Default'); }   // ?reset -> discard saved session, load the authored default
-  else if(loadState()){ afterConfigChange(); _restored=true; }                 // restore last session from localStorage (keep its saved pan/zoom)
+  if(new URLSearchParams(location.search).get('reset')!==null){ try{ localStorage.removeItem(CFG_KEY); localStorage.removeItem(DATASET_KEY); }catch(e){} applyGalaxyPreset('Default'); }   // ?reset -> discard saved session (config + authored systems), load the authored default
+  else if(loadState()){ afterConfigChange(); restoreDataset(); _restored=true; }   // restore last session: config, then overlay any authored (hand-edited) systems (keep saved pan/zoom)
   else applyGalaxyPreset('Default');                                           // fresh visitor (no saved config) -> the authored default galaxy
   if(!_restored) fitBoardView();                                               // fresh/default -> frame the board to THIS screen (adaptive; the baked view.camZoom was fitted for one screen, so it looks 'far' on bigger screens / too close on mobile)
   window.addEventListener('beforeunload', ()=>autoSave(true));                 // persist on reload/close
@@ -1609,7 +1609,8 @@ function isTouchDevice(){ return !!(window.matchMedia && window.matchMedia('(poi
 function enterFullscreen(){ applyFullscreen(true); if(isTouchDevice()) return; let el=document.documentElement; if(el.requestFullscreen){ try{ el.requestFullscreen().catch(()=>{}); }catch(e){} } }   // touch/mobile: app-side fullscreen only (skip the browser Fullscreen API — its native X control + re-entry quirks); desktop still goes true-fullscreen
 function exitFullscreen(){ let inFs=!!document.fullscreenElement; applyFullscreen(false); if(inFs && document.exitFullscreen){ try{ document.exitFullscreen().catch(()=>{}); }catch(e){} } }
 const CFG_KEY='galaxy_studio_cfg';
-let lastSaved='', lastSaveCheck=0;
+const DATASET_KEY='galaxy_studio_dataset';   // authored galaxies (exact hand-edited systems) persist HERE, separate from the config snapshot -> studioSnapshot/exportCFG (the panels-port contract) stay systems-free
+let lastSaved='', lastSaveCheck=0, lastDataset='';
 function studioSnapshot(){ return Object.assign({}, CFG, { build: BUILD_ID, worldSpec: WORLD_SPEC, view:{ camX:cam.x, camY:cam.y, camZoom:cam.zoom, preset:ACTIVE_PRESET } }); }   // full studio state: build id + all CFG + framing + preset. `build` is metadata — applySnapshot ignores it (only merges CFG sections + view), so it round-trips harmlessly.
 function buildNum(id){ let m=/(\d{8})\.(\d+)/.exec(id||''); return m ? (+m[1])*100 + (+m[2]) : 0; }   // 'v0.1_20260720.02' -> 2026072002 (date*100 + seq); missing -> 0
 const FLIP_BUILD = 2026072002;   // build .02: ship-size/gap + lane-gap became MAP-frame world-units; older snapshots stored them as SCREEN px
@@ -1634,8 +1635,16 @@ function afterConfigChange(){                               // re-bake everythin
   showPage();
 }
 function snapClean(k,v){ return (k && k.charAt(0)==='_') ? undefined : v; }   // drop runtime caches (traffic _ships/_pairs) from saved JSON
-function autoSave(force){ let s=JSON.stringify(studioSnapshot(), snapClean); if(!force && s===lastSaved) return; try{ localStorage.setItem(CFG_KEY,s); lastSaved=s; }catch(e){} }
+function autoSave(force){
+  let s=JSON.stringify(studioSnapshot(), snapClean);
+  if(force || s!==lastSaved){ try{ localStorage.setItem(CFG_KEY,s); lastSaved=s; }catch(e){} }
+  // authored galaxy -> persist the EXACT systems to their own key; procedural -> clear it (seed-reproducible).
+  // Kept separate from the CFG early-out above: a hand-edit moves systems without changing CFG, so the dataset must save even when the snapshot string is unchanged.
+  let d = galaxyAuthored ? JSON.stringify(datasetExport()) : '';
+  if(force || d!==lastDataset){ try{ if(d) localStorage.setItem(DATASET_KEY,d); else localStorage.removeItem(DATASET_KEY); lastDataset=d; }catch(e){} }
+}
 function loadState(){ try{ let s=localStorage.getItem(CFG_KEY); if(!s) return false; applySnapshot(JSON.parse(s)); lastSaved=s; return true; }catch(e){ return false; } }
+function restoreDataset(){ try{ let d=localStorage.getItem(DATASET_KEY); if(d && datasetImport(JSON.parse(d))){ lastDataset=d; showPage(); } }catch(e){} }   // authored session: overlay the exact hand-edited systems on the seed-regen (called on restore, right after afterConfigChange)
 function exportCFG(){
   let el=document.getElementById('export-name'); let name=((el&&el.value)||'galaxy_cfg.json').trim()||'galaxy_cfg.json';   // filename from the toolbar field (prompt() is blocked in some panes)
   if(!/\.json$/i.test(name)) name+='.json';
@@ -1655,9 +1664,11 @@ function importCFG(file){
 // (radius ~1200 -> Number-lossless) + the galaxy fields (tier/color/seed). A SEPARATE artifact
 // from the config (studioSnapshot): the config reproduces a PROCEDURAL galaxy from its seed; the
 // dataset stores the ACTUAL systems (survives hand-editing in Phase 3). worldSpec stamps the drift
-// anchor. NOTE: not yet in autosave -> an imported dataset is session-transient (a reload regens
-// from seed); the file is the durable store. Folding it into the snapshot changes the export
-// contract the panels-port consumes -> deferred, flagged decision.
+// anchor. PERSISTENCE (20260801.07): a hand-authored galaxy (galaxyAuthored) now auto-saves to its
+// OWN localStorage key (DATASET_KEY) via autoSave(), and restoreDataset() overlays it on the
+// seed-regen at load -> a favourite hand-edited map reloads intact. Deliberately kept OUT of
+// studioSnapshot/exportCFG: the config file and the panels-port export contract stay systems-free;
+// the dataset FILE remains the portable store. A procedural galaxy clears the key (seed-reproducible).
 function datasetExport(){
   let grp=galaxyGroup();
   return { unit:'click', kind:'galaxy-dataset', worldSpec:WORLD_SPEC,
@@ -1672,7 +1683,7 @@ function datasetImport(data){                                   // reconstruct t
     return { id:r.id, position:pos, x:wc.x, y:wc.y, tier:(r.tier!=null?r.tier:1), color:(Array.isArray(r.color)?r.color.slice():[200,200,200]), seed:(r.seed!=null?r.seed:0) }; });
   sysMap=new Map(galaxy.map(s=>[s.id,s]));
   galaxyMeta={ id:g.id||'galaxy', name:g.name||'Galaxy', anchorMode:g.anchorMode||'origin', version:g.version||'', meta:g.meta||{} };
-  galaxyAuthored=true; lnNeedsBuild=true; sfNeedGen=true; sfDirty=true; invalidateSunSprites(); invalidateBackdrop();   // re-bake lanes/starfield/suns/backdrop to the restored systems (imported = an authored dataset, not seed-reproducible)
+  galaxyAuthored=true; lnNeedsBuild=true; invalidateTraffic(); sfNeedGen=true; sfDirty=true; invalidateSunSprites(); invalidateBackdrop();   // re-bake lanes/traffic/starfield/suns/backdrop to the restored systems (imported = an authored dataset, not seed-reproducible)
   return true;
 }
 function exportDataset(){
@@ -1683,7 +1694,7 @@ function exportDataset(){
 }
 function importDataset(file){
   let rd=new FileReader();
-  rd.onload=()=>{ try{ if(datasetImport(JSON.parse(rd.result))){ showPage(); } else { try{ alert('No records in dataset JSON'); }catch(_){ } } }
+  rd.onload=()=>{ try{ if(datasetImport(JSON.parse(rd.result))){ showPage(); autoSave(true); } else { try{ alert('No records in dataset JSON'); }catch(_){ } } }
     catch(err){ try{ alert('Bad dataset JSON: '+err.message); }catch(_){ console.warn('Bad dataset JSON:', err.message); } } };
   rd.readAsText(file);
 }
