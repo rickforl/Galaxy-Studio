@@ -732,14 +732,30 @@ const DATUM = (function(){
   function unit(){ return (CFG.datum && CFG.datum.distUnit) || 1; }   // dist_unit; default identity (1 unit = 1 world-unit)
   function worldToUnit(w){ return w / unit(); }            // world-units → dist_units
   function unitToWorld(u){ return u * unit(); }            // dist_units → world-units
+  // ======================= COORDINATE CONVENTION (Y axis) =======================
+  // ONE rule, made explicit (cross-project convention; cf. ZBE's toYUp/toYDown helpers):
+  //   PRESENTATION default = Y-UP. In galaxy_studio, WORLD / data / logic / presentation
+  //   are ALL Y-up/ENU: +y = UP / north (stored positions, board rulers, coord readouts).
+  //   The ONLY Y-DOWN frame is the SCREEN (p5 canvas pixels): +y = DOWN the canvas.
+  //   NOTE vs ZBE: their y-down lives in the LOGIC (SVG-native); OURS lives only in the
+  //   SCREEN. So tag crossings `yUpWorld <-> yDownScreen` — NEVER `yDownLogic` (our logic is y-up).
+  //   x is IDENTICAL in both frames; ONLY y flips, and ONLY at these boundaries (all marked
+  //   `[Y-BOUNDARY]` so `grep Y-BOUNDARY` lists every crossing — change one y-sign, audit them ALL):
+  //     (1) this projection: w2s (yUpWorld -> yDownScreen), s2w (screen -> world);
+  //     (2) p5 canvas transforms that BAKE the flip: star matrix scale(z,-z)+translate(.,-cam.y*z),
+  //         backdrop parallax, sun projection;
+  //     (3) EVERY cam.y consumer: pan handlers (cam.y -= screen_dy), parallax translates, cull rects;
+  //     (4) screen->world RANGE code: GRID.VIS() (normalize min/max), culling / iteration bounds.
+  //   History: the .03/.04 pan+parallax and the GRID.VIS regressions were each a MISSED member of
+  //   a class above — the four move together, so audit the whole grep, not one call site.
   // ---- world <-> screen PROJECTION (boundary-B: the space/view module now owns it) ----
   // screen = center + (cam + world) × zoom. ONE implementation; callers pass cam (cx,cy,z) and,
   // optionally, the projection center (px,py). GRID passes its OWN cached center so bake buffers
   // stay correct; galaxy-view callers omit it and get the live canvas center. Byte-identical to
   // the inline formula it replaces — this is the seam a future WORLD-space consumer swaps.
   function center(){ return { x:(PANELW+width)/2, y:height/2 }; }
-  function w2s(wx, wy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x: px+(cx+wx)*z, y: py-(cy+wy)*z }; }   // Y-up: world +y renders UP (ENU), so y is subtracted
-  function s2w(sx, sy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x:(sx-px)/z-cx, y:(py-sy)/z-cy }; }   // inverse of the Y-up projection
+  function w2s(wx, wy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x: px+(cx+wx)*z, y: py-(cy+wy)*z }; }   // [Y-BOUNDARY yUpWorld->yDownScreen] Y-up: world +y renders UP (ENU), so y is subtracted (x identical)
+  function s2w(sx, sy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x:(sx-px)/z-cx, y:(py-sy)/z-cy }; }   // [Y-BOUNDARY yDownScreen->yUpWorld] inverse of the Y-up projection
   return { mapPx, screenPx, unit, worldToUnit, unitToWorld, center, w2s, s2w, MIN_PX };
 })();
 
@@ -862,7 +878,7 @@ const GRID = (function(){
   const POLAR_ZERO={ east:0, north:-90, west:180, south:90 };
   function setCam(camX,camY,camZoom){ _cx=(camX!==undefined)?camX:cam.x; _cy=(camY!==undefined)?camY:cam.y; _z=(camZoom!==undefined)?camZoom:cam.zoom; _px=(PANELW+width)/2; _py=height/2; _bx0=PANELW;_by0=0;_bx1=width;_by1=height; }
   function S(wx,wy){ return DATUM.w2s(wx,wy,_cx,_cy,_z,_px,_py); }            // world -> screen (same projection as the galaxy view)
-  function VIS(){ let p0=DATUM.s2w(_bx0,_by0,_cx,_cy,_z,_px,_py), p1=DATUM.s2w(_bx1,_by1,_cx,_cy,_z,_px,_py); return { x0:Math.min(p0.x,p1.x), x1:Math.max(p0.x,p1.x), y0:Math.min(p0.y,p1.y), y1:Math.max(p0.y,p1.y) }; }   // visible world rect — NORMALIZED to min/max (Y-up flips s2w's screen->world y, so the raw top/bottom come reversed; square/hex range loops iterate y0..y1 and need y0<=y1)
+  function VIS(){ let p0=DATUM.s2w(_bx0,_by0,_cx,_cy,_z,_px,_py), p1=DATUM.s2w(_bx1,_by1,_cx,_cy,_z,_px,_py); return { x0:Math.min(p0.x,p1.x), x1:Math.max(p0.x,p1.x), y0:Math.min(p0.y,p1.y), y1:Math.max(p0.y,p1.y) }; }   // [Y-BOUNDARY yDownScreen->yUpWorld, range] visible world rect — NORMALIZED to min/max (Y-up flips s2w's screen->world y, so the raw top/bottom come reversed; square/hex range loops iterate y0..y1 and need y0<=y1)
   function RAD(){ return CFG.gen.radius; }                                       // grid coordinate radius = the galaxy radius
   function iso2s(wx,wy,wz){ let a=G.isoRot*Math.PI/180, rx=wx*Math.cos(a)-wy*Math.sin(a), ry=wx*Math.sin(a)+wy*Math.cos(a);
     let ix=(rx-ry)*ISO_COS, iy=(rx+ry)*ISO_SIN*G.isoPitch-(wz||0);
@@ -1038,7 +1054,7 @@ const GRID = (function(){
   function axialRound(q,r){ let x=q, z=r, y=-x-z, rx=Math.round(x), ry=Math.round(y), rz=Math.round(z);   // cube rounding -> nearest hex
     let dx=Math.abs(rx-x), dy=Math.abs(ry-y), dz=Math.abs(rz-z);
     if(dx>dy && dx>dz) rx=-ry-rz; else if(dy>dz) ry=-rx-rz; else rz=-rx-ry; return { q:rx, r:rz }; }
-  function dispY(wy){ return G.coYup ? wy : -wy; }                              // internal world is now Y-up/ENU (+Y = up/north); coYup shows it native, off shows Y-down
+  function dispY(wy){ return G.coYup ? wy : -wy; }                              // [Y-BOUNDARY yUpWorld->presentation] internal world is Y-up/ENU (+Y = up/north); coYup shows it native, off flips to Y-down for display only
   function genCoordStr(wx,wy){ return 'x'+Math.round(wx)+' y'+Math.round(dispY(wy))+' r'+Math.round(Math.hypot(wx,wy)); }
   function gridCoordStr(wx,wy){
     if(G.type==='polar'){ let r=Math.hypot(wx,wy), ring=Math.floor(r/G.ringSpacing)+1, a0=(POLAR_ZERO[G.polarZero]||0)+G.angleOffset, th=Math.atan2(wy,wx)*180/Math.PI;
@@ -1164,11 +1180,11 @@ function drawGalaxyView(){
   drawTraffic();                                            // ships riding the lanes + smuggler drifters (over lanes, under systems)
   let playX=(PANELW+width)/2, playY=height/2, playW=width-PANELW;
   let hw=playW/(2*cam.zoom), hh=height/(2*cam.zoom);
-  let vMinX=-cam.x-hw, vMaxX=-cam.x+hw, vMinY=-cam.y-hh, vMaxY=-cam.y+hh;   // visible world rect (cull)
+  let vMinX=-cam.x-hw, vMaxX=-cam.x+hw, vMinY=-cam.y-hh, vMaxY=-cam.y+hh;   // [Y-BOUNDARY cam.y consumer] visible world rect (cull) — vMinY/vMaxY are -cam.y +/- half-height (world Y-up)
   let baked = CFG.gen.bakedRender;
   let liveOverlay = baked && ['glow','streamers','bloom','core','rim','prom','embers'].some(L => OPTS[L+'On'] && CFG.sun['bake_'+L]===false);
   push();
-  translate(playX, playY); translate(cam.x*cam.zoom, -cam.y*cam.zoom); scale(cam.zoom, -cam.zoom);   // Y-up: negate cam.y + flip scale-y so stars match DATUM.w2s (suns are radial, so the sprite mirror is invisible)
+  translate(playX, playY); translate(cam.x*cam.zoom, -cam.y*cam.zoom); scale(cam.zoom, -cam.zoom);   // [Y-BOUNDARY cam.y consumer, canvas flip] Y-up: negate cam.y + flip scale-y so stars match DATUM.w2s (suns are radial, so the sprite mirror is invisible)
   let drawn=0;
   for(const s of galaxy){
     let wr = CFG.gen.starSize * (1 + (s.tier-1)*0.35);        // world star radius by tier
@@ -1387,7 +1403,7 @@ function bd_fadeViewport(F){                                                  //
   let cx, cy, sx, sy;
   if(F.track==='map'){                                                     // anchored to the galaxy (world origin + radius): Inner/Outer are ×gen.radius; zooms AND pans with the map
     let z=cam.zoom, px=(PANELW+width)/2, py=height/2, R=Math.max((CFG.gen.radius||1000)*z, 1);
-    cx=px+cam.x*z; cy=py-cam.y*z; sx=R; sy=R;                                  // 1 unit = galaxy radius on screen (Y-up: origin projects to py - cam.y*z)
+    cx=px+cam.x*z; cy=py-cam.y*z; sx=R; sy=R;                                  // [Y-BOUNDARY cam.y consumer, canvas flip] 1 unit = galaxy radius on screen (Y-up: origin projects to py - cam.y*z)
   } else {                                                                     // viewport vignette (screen-space, aspect-aware)
     let sh=(F.shape===undefined?1:F.shape), avg=(pw+ph)*0.25;
     cx=PANELW+pw*0.5; cy=ph*0.5; sx=lerp(avg,pw*0.5,sh); sy=lerp(avg,ph*0.5,sh);   // shape: 0 = round circle .. 1 = viewport-aspect ellipse
@@ -1415,7 +1431,7 @@ function drawBackdrop(parallax){                                              //
     if(parallax && L==='fade') continue;                                     // fade -> aspect-aware viewport vignette after the loop
     let lz=1;
     if(parallax){ let p=(B[L+'Parallax']!==undefined?B[L+'Parallax']:1); lz=Math.pow(cam.zoom,p);
-      push(); translate(pcx,pcy); translate(cam.x*lz*p, -cam.y*lz*p); scale(lz); }   // p=1 -> locked to galaxy; lower -> farther (Y-up: -cam.y so the backdrop parallax pans with the systems)
+      push(); translate(pcx,pcy); translate(cam.x*lz*p, -cam.y*lz*p); scale(lz); }   // [Y-BOUNDARY cam.y consumer, canvas flip] p=1 -> locked to galaxy; lower -> farther (Y-up: -cam.y so the backdrop parallax pans with the systems)
     if(B['bake_'+L]!==false){                                                 // baked: blit this layer's own buffer (rebuild if dirty/resized)
       let b=bdBuf[L];
       if(bdDirty || !b || b.width!==res || (L==='neb' && nebFading)) b=bakeBdLayer(L, E, res);   // re-bake neb each frame during the crossfade
@@ -1452,7 +1468,7 @@ function mouseReleased(){   // edit mode: finish a grab (move committed on drag;
   gPressPt=null; editDrag=null; }
 function mouseDragged(){
   if(editDrag){ moveEditStar(mouseX,mouseY); return; }                                   // 3b: grabbed a star -> move it (not pan)
-  if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y -= (mouseY-pmouseY)/cam.zoom; lastInteract=millis(); } }   // cam.y is Y-up: subtract screen dy so the map follows the cursor (was += pre-Y-up)
+  if(viewMode==='galaxy' && mouseX>PANELW){ cam.x += (mouseX-pmouseX)/cam.zoom; cam.y -= (mouseY-pmouseY)/cam.zoom; lastInteract=millis(); } }   // [Y-BOUNDARY cam.y consumer, pan] cam.y is Y-up: subtract screen dy so the map follows the cursor (was += pre-Y-up)
 function mouseWheel(e){ if(viewMode==='galaxy' && mouseX>PANELW){ cam.zoom = constrain(cam.zoom*(e.delta>0?0.9:1.1), 0.05, 6); lastInteract=millis(); return false; } }
 // ---------- Touch (mobile): 1-finger pan, 2-finger pinch-zoom, tap = grid waypoint. Mirrors the mouse handlers; returning false = preventDefault (no page scroll/zoom, no synthesized mouse events -> no double-handling) ----------
 let _tPrev=null, _tPinch=0, _tStart=null, _tMoved=false, _tActive=false, _lastTap=0;
@@ -1477,7 +1493,7 @@ function touchMoved(){
   } else if(_tPrev){                                         // 1 finger: move a grabbed star, else pan
     let t0=touches[0];
     if(editDrag){ moveEditStar(t0.x,t0.y); _tMoved=true; _tPrev={x:t0.x,y:t0.y}; }               // 3b: grabbed -> move star
-    else { cam.x += (t0.x-_tPrev.x)/cam.zoom; cam.y -= (t0.y-_tPrev.y)/cam.zoom; _tPrev={x:t0.x,y:t0.y};   // Y-up: subtract screen dy so the map follows the finger
+    else { cam.x += (t0.x-_tPrev.x)/cam.zoom; cam.y -= (t0.y-_tPrev.y)/cam.zoom; _tPrev={x:t0.x,y:t0.y};   // [Y-BOUNDARY cam.y consumer, pan] Y-up: subtract screen dy so the map follows the finger
       if(_tStart && Math.hypot(t0.x-_tStart.x, t0.y-_tStart.y)>8) _tMoved=true; }
   }
   lastInteract=millis(); return false;
