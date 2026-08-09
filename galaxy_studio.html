@@ -733,6 +733,8 @@ const DATUM = (function(){
   function worldToUnit(w){ return w / unit(); }            // world-units → dist_units
   function unitToWorld(u){ return u * unit(); }            // dist_units → world-units
   // ======================= COORDINATE CONVENTION (Y axis) =======================
+  // CANONICAL RULE: WORLD/modules/space/constants.v01 — COORDINATE FRAME. This block is its
+  //   galaxy_studio instantiation (the DEFAULT case: yUpWorld<->yDownScreen). Keep in sync.
   // ONE rule, made explicit (cross-project convention; cf. ZBE's toYUp/toYDown helpers):
   //   PRESENTATION default = Y-UP. In galaxy_studio, WORLD / data / logic / presentation
   //   are ALL Y-up/ENU: +y = UP / north (stored positions, board rulers, coord readouts).
@@ -756,6 +758,12 @@ const DATUM = (function(){
   function center(){ return { x:(PANELW+width)/2, y:height/2 }; }
   function w2s(wx, wy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x: px+(cx+wx)*z, y: py-(cy+wy)*z }; }   // [Y-BOUNDARY yUpWorld->yDownScreen] Y-up: world +y renders UP (ENU), so y is subtracted (x identical)
   function s2w(sx, sy, cx, cy, z, px, py){ if(px===undefined){ px=(PANELW+width)/2; py=height/2; } return { x:(sx-px)/z-cx, y:(py-sy)/z-cy }; }   // [Y-BOUNDARY yDownScreen->yUpWorld] inverse of the Y-up projection
+  // [Y-BOUNDARY round-trip guard] dev self-check (runs once, non-throwing): s2w must invert w2s — x identical, y flips exactly once.
+  if(typeof window!=='undefined' && !window.__ySeamChecked){ window.__ySeamChecked=true;
+    const _w={x:137.5,y:-42.25}, _c={x:11,y:-7,z:3.5}, _px=400, _py=300;
+    const _s=w2s(_w.x,_w.y,_c.x,_c.y,_c.z,_px,_py), _b=s2w(_s.x,_s.y,_c.x,_c.y,_c.z,_px,_py);
+    if(Math.abs(_b.x-_w.x)>1e-6 || Math.abs(_b.y-_w.y)>1e-6) console.warn('[Y-BOUNDARY] w2s/s2w round-trip FAILED', _w, '->', _b);
+  }
   return { mapPx, screenPx, unit, worldToUnit, unitToWorld, center, w2s, s2w, MIN_PX };
 })();
 
