@@ -1133,7 +1133,7 @@ function drawGridPreview(){
 // ---------- Dev SCHEMATIC board view (simplest form: cells + dots + single-line lanes by traffic type) ----------
 const SCHEM_LANE_COL = { off:[80,220,255], uno:[255,90,90], trans:[100,235,130], smuggler:[235,90,235] };   // Official cyan / Unofficial red / Transport green / Smuggler magenta
 function schemProj(wx,wy){ return DATUM.w2s(wx,wy, cam.x,cam.y,cam.zoom, (PANELW+width)/2, height/2); }
-function schemCell(v){ return Math.round(v/CELL_CLICKS)*CELL_CLICKS; }   // snap a click coord to its board-cell node (coarse magnitude)
+function schemCell(v){ return MAG.rescale(Math.round(MAG.rescale(v, CLICK_MAG, CELL_MAG)), CELL_MAG, CLICK_MAG); }   // snap a click coord to its board-cell node via the magnitude LENS (clicks -> cells@mag, round, cells -> clicks). Identical to round(v/CELL_CLICKS)*CELL_CLICKS, but now a real MAG.rescale that generalizes to any magnitude stop  [MAG/CLICK_MAG/CELL_MAG defined with the board model below]
 function drawSchematic(){
   background(8,10,16);
   if(lnNeedsBuild) lnBuild();
@@ -1227,6 +1227,28 @@ function randomSpectral(g){
   return [constrain(base[0]+random(-j,j),0,255), constrain(base[1]+random(-j,j),0,255), constrain(base[2]+random(-j,j),0,255)];
 }
 const CELL_CLICKS = 100;   // 1 board cell = 100 clicks (the "c=100" fine magnitude). Board = boardN cells -> square extent = boardN*50 clicks each side. x10 magnitude ladder; coarse-board cell of a system = round(click/100).
+// ---- WORLD space.magnitude LENS (PROTOTYPE port to JS from modules/space/magnitude.v01, worldSpec v01) ----
+// The principled base-10 scale ladder that replaces galaxy_studio's ad-hoc ÷CELL_CLICKS coarse view.
+// DISPLAY/AUTHORING-SIDE ONLY, never canonical (canonical truth stays exact-BigInt in FIXPT; this is the lens you view it through).
+const MAG = (function(){
+  const BASE=10, DATUM=1, NMIN=1, NMAX=10;
+  function scaleFactor(mag){ return Math.pow(BASE, mag-DATUM); }                        // datum-clicks per local-click at `mag`: 10^(mag-1). mag1->1, mag2->10, mag3->100
+  function rescale(v, fromMag, toMag){ return v*Math.pow(BASE, fromMag-toMag); }        // re-express v (known at fromMag) so it reads at toMag. higher mag -> smaller local number
+  function rescalePosition(p, fromMag, toMag){ let f=Math.pow(BASE, fromMag-toMag); return { x:p.x*f, y:p.y*f, z:(p.z||0)*f }; }
+  function normalize(p, currentMag){                                                    // re-express at the magnitude that puts the largest |axis| in [1,10); origin -> magnitude null
+    let big=Math.max(Math.abs(p.x), Math.abs(p.y), Math.abs(p.z||0));
+    if(big===0) return { position:{x:p.x,y:p.y,z:(p.z||0)}, magnitude:null };
+    let k=Math.floor(Math.log(big)/Math.log(BASE)), f=Math.pow(BASE,-k);
+    if(big*f>=NMAX){ k+=1; f=Math.pow(BASE,-k); } else if(big*f<NMIN){ k-=1; f=Math.pow(BASE,-k); }   // float-guard at exact powers of ten
+    return { position:{x:p.x*f, y:p.y*f, z:(p.z||0)*f}, magnitude:currentMag+k };
+  }
+  return { BASE, DATUM, scaleFactor, rescale, rescalePosition, normalize };
+})();
+const CLICK_MAG = 1;                                                        // the stored/fine position sits at the click datum = magnitude 1
+const CELL_MAG  = CLICK_MAG + Math.round(Math.log10(CELL_CLICKS));          // board-cell magnitude: CELL_CLICKS=100=10^2 -> cells are 2 magnitudes coarser than clicks (mag 3)
+function magReadout(wx, wy){ let n=MAG.normalize({x:wx,y:wy,z:0}, CLICK_MAG);   // "control too many zeros": show a click position at the magnitude that keeps it readable (cells for board-scale, clicks up close)
+  if(n.magnitude==null) return 'origin (magnitude-agnostic)';
+  return n.position.x.toFixed(2)+', '+n.position.y.toFixed(2)+'  @mag '+n.magnitude+'  (×10^'+(n.magnitude-CLICK_MAG)+' clicks)'; }
 function generateGalaxy(g){
   randomSeed(g.seed|0);
   galaxy=[];
