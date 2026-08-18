@@ -908,11 +908,12 @@ const GRID = (function(){
   function boundaryPath(dc,o,r){ dc.beginPath(); if(G.boundaryShape==='square') dc.rect(o.x-r,o.y-r,r*2,r*2); else dc.arc(o.x,o.y,r,0,Math.PI*2); }
   function applyLineStyle(style){ let dc=_P.drawingContext, s=G.dashScale||1;
     switch(style){ case 'dashed': dc.setLineDash([8*s,6*s]); dc.lineCap='butt'; break; case 'dotted': dc.setLineDash([0.1,4*s]); dc.lineCap='round'; break; case 'dashdot': dc.setLineDash([9*s,5*s,0.1,5*s]); dc.lineCap='round'; break; default: dc.setLineDash([]); dc.lineCap='butt'; } }
+  function minorFade(spacingClicks){ return MINOR_ADAPTIVE ? ZOOM.minorAlpha(spacingClicks*_z) : 1; }   // zoom-adaptive minor-line opacity factor: on-screen spacing = clicks * px-per-click(_z); fades to 0 under ~7px, full by ~16px (smooths the hard sp*_z decimation cutoffs)
   function drawSquare(){
     let V=VIS(), sp=G.sqSpacing;
     let n=Math.ceil((V.x1-V.x0)/sp)+Math.ceil((V.y1-V.y0)/sp); if(n>4000) return;
     let nc=brightRGB(G.minorColor,G.minorBright);
-    let base=rgba(nc,G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9)), axc=rgba(G.color,Math.min(1,G.opacity*2.6)), subc=rgba(nc,G.minorOpacity*0.5);
+    let base=rgba(nc,G.minorOpacity*minorFade(sp)), majc=rgba(G.color,Math.min(1,G.opacity*1.9)), axc=rgba(G.color,Math.min(1,G.opacity*2.6)), subc=rgba(nc,G.minorOpacity*0.5);   // minor lines fade by on-screen spacing (major/axis unaffected)
     if(_pass!=='labels'){
       let sub=Math.max(1,Math.round(G.sqSubdiv));
       if(sub>1 && (sp/sub)*_z>=6){ let step=sp/sub; applyLineStyle(G.minorStyle);
@@ -949,7 +950,7 @@ const GRID = (function(){
   function drawPolar(){
     let V=VIS(), rs=G.ringSpacing;
     let maxR=G.clip?rGridExtent():Math.max(Math.hypot(V.x0,V.y0),Math.hypot(V.x1,V.y0),Math.hypot(V.x0,V.y1),Math.hypot(V.x1,V.y1));
-    let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9));
+    let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity*minorFade(rs)), majc=rgba(G.color,Math.min(1,G.opacity*1.9));   // polar rings/spokes fade by on-screen ring spacing
     let sc=G.spokeCount|0, a0=((POLAR_ZERO[G.polarZero]||0)+G.angleOffset)*Math.PI/180;
     if(_pass!=='labels'){
       if(maxR/rs<400) for(let r=rs; r<=maxR; r+=rs){ let major=(Math.round(r/rs)%5===0); applyLineStyle(major?G.majorStyle:G.minorStyle); circ(r, major?majc:base, major?G.weight*1.6:G.weight); }
@@ -994,7 +995,7 @@ const GRID = (function(){
     let R=rGridExtent(), sp=G.sqSpacing; if(R/sp>500) return;
     let kmax=Math.floor(R/sp);
     if(_pass!=='labels'){
-      let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity), majc=rgba(G.color,Math.min(1,G.opacity*1.9)), axc=rgba(G.color,Math.min(1,G.opacity*2.6));
+      let base=rgba(brightRGB(G.minorColor,G.minorBright),G.minorOpacity*minorFade(sp)), majc=rgba(G.color,Math.min(1,G.opacity*1.9)), axc=rgba(G.color,Math.min(1,G.opacity*2.6));   // iso minor lines fade by on-screen spacing
       let ext=(v)=>G.boundaryShape==='square'?R:Math.sqrt(Math.max(0,R*R-v*v));
       for(let k=-kmax;k<=kmax;k++){ let w=k*sp, major=(k%G.sqMajor===0), axis=(k===0); applyLineStyle((major||axis)?G.majorStyle:G.minorStyle);
         let col=axis?axc:(major?majc:base), lw=(axis?G.weight*2:(major?G.weight*1.6:G.weight)), e=ext(w); segIso(w,-e,w,e,col,lw); segIso(-e,w,e,w,col,lw); }
@@ -1249,6 +1250,16 @@ const CELL_MAG  = CLICK_MAG + Math.round(Math.log10(CELL_CLICKS));          // b
 function magReadout(wx, wy){ let n=MAG.normalize({x:wx,y:wy,z:0}, CLICK_MAG);   // "control too many zeros": show a click position at the magnitude that keeps it readable (cells for board-scale, clicks up close)
   if(n.magnitude==null) return 'origin (magnitude-agnostic)';
   return n.position.x.toFixed(2)+', '+n.position.y.toFixed(2)+'  @mag '+n.magnitude+'  (×10^'+(n.magnitude-CLICK_MAG)+' clicks)'; }
+// ---- WORLD board-world/zoomRender LENS (PROTOTYPE port to JS; the PRESENTATION companion to MAG) ----
+// Two axes of the same LOD ladder: MAG = the coordinate/data-scale axis (which magnitude stop); ZOOM = the
+// presentation/on-screen-px axis (how crisply to draw a feature at the current zoom). Pure (px,...)->number;
+// taste params (thresholds) are consumer-side (WORLD_PRINCIPLES #10). Faithful port of board-world/zoomRender.ts.
+const ZOOM = (function(){
+  function zoomFade(px, thresholdPx, blendPx){ if(blendPx<=0) return px>=thresholdPx?1:0; return Math.max(0, Math.min(1, (px-thresholdPx)/blendPx + 0.5)); }   // linear fade centred on thresholdPx, spanning blendPx of on-screen px (hard step if blendPx<=0)
+  function minorAlpha(spacingPx, startPx, endPx){ startPx=(startPx===undefined)?7:startPx; endPx=(endPx===undefined)?16:endPx; return zoomFade(spacingPx, (startPx+endPx)/2, endPx-startPx); }   // grid minor-line fade by on-screen spacing (a zoomFade special case; recommended 7->16px)
+  return { zoomFade, minorAlpha };
+})();
+let MINOR_ADAPTIVE = true;   // PROTOTYPE dev flag: fade square/iso/polar MINOR grid lines by on-screen spacing (ZOOM.minorAlpha) instead of a fixed minorOpacity. Toggle to compare. TODO graduate to CFG.grid.minorAdaptive + minorFadeStart/End (config-side thresholds, WORLD #10).
 function generateGalaxy(g){
   randomSeed(g.seed|0);
   galaxy=[];
