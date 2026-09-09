@@ -103,7 +103,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260817';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '02';           // per-day build sequencer -- bump each build (01, 02, 03, ...); resets to '01' on a new day OR a new major version   [v2_20260817.02: a new seed (reroll button OR the seed slider) now also REGENERATES the BRIGHT starfield layer — its generation seed tracks gen.seed (gs*7919+...), so the bright foreground stars reshuffle per galaxy; the other star layers keep their fixed pattern. Scoped to seed changes (sfNeedGen), so other gen sliders don't re-bake the starfield]
+const BUILD_SEQ  = '03';           // per-day build sequencer -- bump each build (01, 02, 03, ...); resets to '01' on a new day OR a new major version   [v2_20260817.03: NEW-GALAXY randomization + a new background photo. A new seed can now randomize the NEBULA colors (nebRandom, HSL palette) and the BACKGROUND IMAGE (imgRandom: photo + rotate + flip H + new flip V) — both are opt-in toggles in Galaxy Gen, deterministic per seed, off = keep the saved default (nebula magenta/blue; pink01.jpg). Added a vertical-flip image mechanic (imgFlipV, exposed as Backdrop "Flip V"; the horizontal one relabeled "Flip H"). Added spiral_gal_01.jpg to the background collection (index 13; pink stays 12)]
 const BUILD_ID   = 'v2_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v2 = stability / production milestone: mobile accessibility + robust save/load + safe default propagation; v1 was the WORLD-consumer architecture. buildNum() ignores the v#_ prefix, so v2.01 < v1.08 numerically is fine — only the >= FLIP_BUILD migration gate reads it)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -135,13 +135,13 @@ let CFG = {
     bake_core: true, bake_glow: true, bake_streamers: false, bake_bloom: false, bake_rim: true, bake_prom: true, bake_embers: true
   },
   gen: { starCount: 60, boardN: 40, boardShape: 'square', radius: 1200, minDist: 130, useGalaxy01: true, starSize: 12, seed: 1234, bakedRender: true,
-         wM: 1, wK: 1, wG: 1, wF: 1, wB: 1, wO: 1, jitter: 15, specDist: 'equal' },
+         wM: 1, wK: 1, wG: 1, wF: 1, wB: 1, wO: 1, jitter: 15, specDist: 'equal', nebRandom: false, imgRandom: false },   // nebRandom/imgRandom: a new seed randomizes the 3 nebula colors / the background image (photo + rotate + flip H/V); off = keep the saved default
   backdrop: {
     cover: 1.5, bakeRes: 1024, bdFill: true, bdFillMargin: 1.15,                // cover = world square size; bdFill scales the fill layers to cover the viewport (no dark edges) with margin headroom for pan
     // BASE FILL
     baseOn: true, baseColor: [6, 8, 16], baseOpacity: 1.0,
     // IMAGE (curated photo gallery in galaxy_backgrounds/)
-    imgOn: false, imgTrack: 'viewport', imgIndex: 3, imgHashPick: false, imgRot: 0, imgFlip: false, imgScale: 1.0, imgOpacity: 1.0,
+    imgOn: false, imgTrack: 'viewport', imgIndex: 3, imgHashPick: false, imgRot: 0, imgFlip: false, imgFlipV: false, imgScale: 1.0, imgOpacity: 1.0,
     // NEBULA (procedural: domain-warp / fBm / emission noise field, or legacy blobs)
     nebOn: true, nebTrack: 'viewport', nebType: 'domainwarp', nebColorA: [40, 30, 90], nebColorB: [120, 40, 110], nebColorC: [245, 215, 185],
     nebScale: 1.0, nebOctaves: 5, nebWarp: 1.2, nebContrast: 1.4, nebThreshold: 0.15, nebOpacity: 1.2, nebCount: 42, nebSeed: 7,
@@ -1325,15 +1325,15 @@ function bdGetImg(idx){
   return null;                                              // not ready this frame; re-bakes when the load resolves
 }
 function bdImgPick(B){
-  if(!B.imgHashPick) return { idx:B.imgIndex, rot:B.imgRot, flip:B.imgFlip };
+  if(!B.imgHashPick) return { idx:B.imgIndex, rot:B.imgRot, flip:B.imgFlip, flipV:B.imgFlipV };
   let h=(CFG.gen.seed|0);                                   // hash-driven: deterministic image/rot/flip from the galaxy seed
-  return { idx:Math.floor(bdHash(1,h)*BD_IMGS.length), rot:Math.floor(bdHash(2,h)*4), flip:bdHash(3,h)<0.5 };
+  return { idx:Math.floor(bdHash(1,h)*BD_IMGS.length), rot:Math.floor(bdHash(2,h)*4), flip:bdHash(3,h)<0.5, flipV:bdHash(4,h)<0.5 };
 }
 function bd_image(P,E,B){
   let pk=bdImgPick(B), img=bdGetImg(pk.idx);
   if(!img) return;
   P.push(); P.imageMode(CENTER);
-  P.rotate(pk.rot*HALF_PI); if(pk.flip) P.scale(-1,1);
+  P.rotate(pk.rot*HALF_PI); if(pk.flip) P.scale(-1,1); if(pk.flipV) P.scale(1,-1);
   let s=(2*E)/Math.min(img.width,img.height)*B.imgScale;    // cover the square; radial fade masks the overflow edges
   let dc=P.drawingContext, pa=dc.globalAlpha; dc.globalAlpha=B.imgOpacity;   // opacity via globalAlpha — avoids p5 tint's per-pixel cost
   P.image(img, 0,0, img.width*s, img.height*s);
@@ -1488,8 +1488,15 @@ function drawBackdrop(parallax){                                              //
   else if(B.fade2On) bd_fade(window, E, fadeParams(B,2));   // preview: fade 1 drew in the loop; add fade 2 on top                                 // hides the backdrop edge cutoff, matched to the viewport aspect
   bdDirty=false;
 }
+function _hsl(h,s,l){ h/=360; let q=l<0.5?l*(1+s):l+s-l*s, p=2*l-q, t2c=function(t){ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6)return p+(q-p)*6*t; if(t<0.5)return q; if(t<2/3)return p+(q-p)*(2/3-t)*6; return p; }; return [Math.round(t2c(h+1/3)*255),Math.round(t2c(h)*255),Math.round(t2c(h-1/3)*255)]; }   // HSL(0-360,0-1,0-1) -> [r,g,b]
+function randomizeNebColors(){ let B=CFG.backdrop, sd=((CFG.gen.seed|0)*2246822519+3266489917)%2147483647; randomSeed(sd>0?sd:1);   // nebula-specific seed from gen.seed -> deterministic per galaxy, distinct from generation's RNG (nebColorA/B/C are in nebSigStatic, so the field re-renders on change)
+  B.nebColorA=_hsl(random(360), random(0.55,0.9), random(0.14,0.28));   // deep base (dark, saturated)
+  B.nebColorB=_hsl(random(360), random(0.5,0.85), random(0.22,0.42));   // mid
+  B.nebColorC=_hsl(random(360), random(0.15,0.5), random(0.72,0.9)); }  // bright highlight (soft)
+function randomizeBgImage(){ let B=CFG.backdrop, sd=((CFG.gen.seed|0)*1103515245+12345)%2147483647; randomSeed(sd>0?sd:1);   // image-specific seed from gen.seed -> deterministic per galaxy (re-bakes via invalidateBackdrop)
+  B.imgIndex=Math.floor(random(BD_IMGS.length)); B.imgRot=Math.floor(random(4)); B.imgFlip=random()<0.5; B.imgFlipV=random()<0.5; }   // random photo + rotate(0-3×90°) + flip H + flip V
 function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); invalidateLanes(); invalidateTraffic(); }   // radius change -> extent change -> re-bake + relink
-function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); sfNeedGen=true; regenerate(); }   // new seed -> also regenerate the Bright starfield layer
+function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); sfNeedGen=true; if(CFG.gen.nebRandom) randomizeNebColors(); if(CFG.gen.imgRandom) randomizeBgImage(); regenerate(); }   // new seed -> Bright layer + (if on) randomize nebula colors / bg image
 const BOARD_FILL = 0.94;   // framing factor: <1 OVERSCANS so the galaxy FILLS the screen and the board edges sit just outside view (was 1.12 = 11% margin). Bigger 'wow' on first load
 function fitBoardView(){ let ext=Math.max(1,(CFG.gen.boardN|0))*CELL_CLICKS, playW=width-PANELW; cam.x=0; cam.y=0; cam.zoom=Math.min(playW,height)/(ext*BOARD_FILL); }   // center origin + zoom so the galaxy fills the screen (edges just outside)
 let gPressPt=null;   // grid-waypoint click-vs-drag tracking
@@ -2042,7 +2049,7 @@ const SUN_SCHEMA = [
 ];
 const GEN_SCHEMA = [
   ['Generation', [['starCount','Stars','range',10,300,1],['boardN','Board size (N×N cells)','range',8,80,2],['boardShape','Shape','select',[['square','Square board'],['disc','Inscribed disc']]],
-    ['minDist','Min spacing','range',40,300,5],['useGalaxy01','galaxy_01 min-dist','bool'],['starSize','Star size','range',4,30,1],['bakedRender','Baked render (fast)','bool']]],
+    ['minDist','Min spacing','range',40,300,5],['useGalaxy01','galaxy_01 min-dist','bool'],['starSize','Star size','range',4,30,1],['bakedRender','Baked render (fast)','bool'],['nebRandom','Randomize nebula @seed','bool'],['imgRandom','Randomize image @seed','bool']]],
   ['Spectral mix', [['specDist','Distribution','select',[['equal','Equal (flat)'],['realistic','Realistic'],['game','Game-realistic']]],
     ['wM','Red (M)','range',0,5,1],['wK','Orange (K)','range',0,5,1],['wG','Yellow (G)','range',0,5,1],
     ['wF','White (F)','range',0,5,1],['wB','Blue (B)','range',0,5,1],['wO','Purple (O)','range',0,5,1],['jitter','Color jitter','range',0,40,1]]]
@@ -2059,14 +2066,14 @@ function applySpecDist(name){                       // set the 6 spectral weight
 const BD_IMGS = ['galaxy_backgrounds/bright_01.png','galaxy_backgrounds/cigar_01.png','galaxy_backgrounds/evileye_01.png',
   'galaxy_backgrounds/gal_neb_10.jpg','galaxy_backgrounds/gal_neb_17.jpg','galaxy_backgrounds/gal_neb_18.jpg',
   'galaxy_backgrounds/gal_neb_19.jpg','galaxy_backgrounds/gal_neb_20.jpg','galaxy_backgrounds/gal_neb_21.jpg',
-  'galaxy_backgrounds/gal_neb_23.jpg','galaxy_backgrounds/gal_neb_24.jpg','galaxy_backgrounds/milky_01.png','galaxy_backgrounds/pink01.jpg'];
+  'galaxy_backgrounds/gal_neb_23.jpg','galaxy_backgrounds/gal_neb_24.jpg','galaxy_backgrounds/milky_01.png','galaxy_backgrounds/pink01.jpg','galaxy_backgrounds/spiral_gal_01.jpg'];
 const BD_IMG_OPTS = BD_IMGS.map((p,i)=>[i, p.split('/').pop().replace(/\.(png|jpg)$/,'')]);
 const NEB_TYPE_OPTS = [['domainwarp','Domain warp'],['fbm','fBm clouds'],['emission','Emission+dust'],['blobs','Blobs (legacy)']];
 const BACKDROP_SCHEMA = [
   ['Global', [['cover','Cover ×radius','range',0.5,8,0.1],['bdFill','Fill viewport','bool'],['bdFillMargin','Fill over','range',1,2.5,0.05],['bakeRes','Bake res','range',256,2048,128]]],
   ['Base fill', [['baseOn','Base','bool'],['baseColor','Color','color'],['baseOpacity','Opacity','range',0,1,0.01]]],
   ['Image', [['imgOn','Image','bool'],['imgIndex','Which','select',BD_IMG_OPTS],['imgHashPick','Hash pick','bool'],
-    ['imgRot','Rotate ×90°','range',0,3,1],['imgFlip','Mirror','bool'],['imgScale','Scale','range',0.3,3,0.05],['imgOpacity','Opacity','range',0,1,0.01],['imgTrack','Track','select',[['viewport','Viewport'],['map','Map (galaxy)']]]]],
+    ['imgRot','Rotate ×90°','range',0,3,1],['imgFlip','Flip H','bool'],['imgFlipV','Flip V','bool'],['imgScale','Scale','range',0.3,3,0.05],['imgOpacity','Opacity','range',0,1,0.01],['imgTrack','Track','select',[['viewport','Viewport'],['map','Map (galaxy)']]]]],
   ['Nebula', [['nebOn','Nebula','bool'],['nebType','Type','select',NEB_TYPE_OPTS],
     ['nebColorA','Color A','color'],['nebColorB','Color B','color'],['nebColorC','Color C','color'],
     ['nebScale','Scale','range',0.2,4,0.05],['nebOctaves','Octaves','range',1,7,1],['nebWarp','Warp amt','range',0,3,0.05],
@@ -2153,7 +2160,7 @@ const GRID_PRESETS = {
 let gridPreset='';
 const PAGES = [
   { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true, onChange: invalidateSunSprites },
-  { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: (key)=>{ if(key==='specDist') applySpecDist(CFG.gen.specDist); if(key==='seed') sfNeedGen=true; regenerate(); if(key==='boardN') fitBoardView(); renderSystemsTable(); } },
+  { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: (key)=>{ if(key==='specDist') applySpecDist(CFG.gen.specDist); if(key==='seed'){ sfNeedGen=true; if(CFG.gen.nebRandom) randomizeNebColors(); if(CFG.gen.imgRandom) randomizeBgImage(); } regenerate(); if(key==='boardN') fitBoardView(); renderSystemsTable(); } },
   { id:'backdrop', label:'Backdrop',   schema: BACKDROP_SCHEMA, target: ()=>CFG.backdrop, onChange: invalidateBackdrop },
   { id:'stars',    label:'Stars',      schema: [], target: ()=>CFG.stars, custom:'stars' },
   { id:'lanes',    label:'Lanes',      schema: LANES_SCHEMA, target: ()=>CFG.lanes, lanePresets:true, onChange: onLaneChange },
