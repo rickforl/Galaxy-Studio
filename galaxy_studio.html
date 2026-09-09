@@ -103,7 +103,7 @@
 
 let ACTIVE_PRESET = 'current';   // starting sun preset (empty override = the CFG.sun defaults above)
 const BUILD_DATE = '20260817';     // build day — reset SEQ to '01' on a new day
-const BUILD_SEQ  = '01';           // per-day build sequencer -- bump each build (01, 02, 03, ...); resets to '01' on a new day OR a new major version   [v2_20260817.01: WORLD-lens adoption + workspace hygiene. Ported the two WORLD coordinate/presentation LENSES to JS — MAG (space.magnitude: scaleFactor 10^(mag-1) / rescale / normalize; the board cell = magnitude 3) and ZOOM (board-world/zoomRender: zoomFade / minorAlpha, zoom-adaptive minor-grid fade on square/iso/polar) — the two axes of the coming magnitude-stop/LOD ladder (PROTOTYPES, no user-facing change at default zoom). Plus: accepted the WORLD agent's Y-seam round-trip guard; added a CLAUDE.md repo-ownership marker (owned zone; sibling agents propose-don't-edit). Coordinate frame + magnitude.v01 both git-verified still in sync with WORLD v2_20260817.01]
+const BUILD_SEQ  = '02';           // per-day build sequencer -- bump each build (01, 02, 03, ...); resets to '01' on a new day OR a new major version   [v2_20260817.02: a new seed (reroll button OR the seed slider) now also REGENERATES the BRIGHT starfield layer — its generation seed tracks gen.seed (gs*7919+...), so the bright foreground stars reshuffle per galaxy; the other star layers keep their fixed pattern. Scoped to seed changes (sfNeedGen), so other gen sliders don't re-bake the starfield]
 const BUILD_ID   = 'v2_' + BUILD_DATE + '.' + BUILD_SEQ;   // shown in the build pill (v2 = stability / production milestone: mobile accessibility + robust save/load + safe default propagation; v1 was the WORLD-consumer architecture. buildNum() ignores the v#_ prefix, so v2.01 < v1.08 numerically is fine — only the >= FLIP_BUILD migration gate reads it)
 const WORLD_SPEC = { space:'v01', exhibit:'v1_20260626.01', convention:'Y-up/ENU · 1 world-unit = 1 click' };   // which WORLD port we consume (ported to JS, not shared) — drift anchor, stamped into exports
 
@@ -337,7 +337,7 @@ function sfField(){ let pw=width-PANELW, ph=height, M=1.5; return { fw:pw*0.5*M,
 function sfGenStars(count, seed){ randomSeed(seed); let a=new Array(count);
   for(let i=0;i<count;i++){ a[i]={ ang:random()*TWO_PI, rr:Math.sqrt(random()), sz:random(), br:random(), ci:Math.floor(random()*STAR_COLS.length), ph:random()*TWO_PI, rate:0.5+random()*1.6, u:random(), v:random() }; }
   return a; }
-function sfGenAll(){ sfData=CFG.stars.layers.map((L,i)=>sfGenStars(L.count|0, 4242+i*131)); sfNeedGen=false; }
+function sfGenAll(){ let gs=CFG.gen.seed|0; sfData=CFG.stars.layers.map((L,i)=>sfGenStars(L.count|0, (L.name==='Bright') ? (gs*7919+4242+i*131) : (4242+i*131))); sfNeedGen=false; }   // Bright layer's seed TRACKS the galaxy seed -> it rerolls with a new seed; other layers keep their fixed pattern
 function invalidateStars(){ sfDirty=true; }
 function sfStarCol(ci,amt){ let b=STAR_COLS[ci]; return [255+(b[0]-255)*amt,255+(b[1]-255)*amt,255+(b[2]-255)*amt]; }
 function sfOpt(L){ return {uniform:L.uniform,radius:L.radius,size:L.size,bright:L.bright,color:L.color,twinkle:L.twinkle,glow:L.glow,spikes:L.spikes,spikeLen:L.spikeLen,speed:CFG.stars.twSpeed}; }
@@ -1489,7 +1489,7 @@ function drawBackdrop(parallax){                                              //
   bdDirty=false;
 }
 function regenerate(){ generateGalaxy(CFG.gen); invalidateBackdrop(); invalidateLanes(); invalidateTraffic(); }   // radius change -> extent change -> re-bake + relink
-function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); regenerate(); }
+function reroll(){ CFG.gen.seed = Math.floor(Math.random()*99999); sfNeedGen=true; regenerate(); }   // new seed -> also regenerate the Bright starfield layer
 const BOARD_FILL = 0.94;   // framing factor: <1 OVERSCANS so the galaxy FILLS the screen and the board edges sit just outside view (was 1.12 = 11% margin). Bigger 'wow' on first load
 function fitBoardView(){ let ext=Math.max(1,(CFG.gen.boardN|0))*CELL_CLICKS, playW=width-PANELW; cam.x=0; cam.y=0; cam.zoom=Math.min(playW,height)/(ext*BOARD_FILL); }   // center origin + zoom so the galaxy fills the screen (edges just outside)
 let gPressPt=null;   // grid-waypoint click-vs-drag tracking
@@ -2153,7 +2153,7 @@ const GRID_PRESETS = {
 let gridPreset='';
 const PAGES = [
   { id:'sun',      label:'Sun',        schema: SUN_SCHEMA, target: ()=>CFG.sun, presets:true, onChange: invalidateSunSprites },
-  { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: (key)=>{ if(key==='specDist') applySpecDist(CFG.gen.specDist); regenerate(); if(key==='boardN') fitBoardView(); renderSystemsTable(); } },
+  { id:'gen',      label:'Galaxy Gen', schema: GEN_SCHEMA, target: ()=>CFG.gen, onChange: (key)=>{ if(key==='specDist') applySpecDist(CFG.gen.specDist); if(key==='seed') sfNeedGen=true; regenerate(); if(key==='boardN') fitBoardView(); renderSystemsTable(); } },
   { id:'backdrop', label:'Backdrop',   schema: BACKDROP_SCHEMA, target: ()=>CFG.backdrop, onChange: invalidateBackdrop },
   { id:'stars',    label:'Stars',      schema: [], target: ()=>CFG.stars, custom:'stars' },
   { id:'lanes',    label:'Lanes',      schema: LANES_SCHEMA, target: ()=>CFG.lanes, lanePresets:true, onChange: onLaneChange },
